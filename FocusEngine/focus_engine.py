@@ -1,46 +1,32 @@
 import json
+import re
 import pyautogui
 from PIL import Image
-import openvino as ov
 from optimum.intel.openvino import OVModelForVisualCausalLM
 from transformers import AutoProcessor
-import platform
+import torch
 
 class FocusEngine:
-    def __init__(self, model_id="HuggingFaceTB/SmolVLM2-500M-Instruct"):
-        print(f"Initializing FocusEngine with model: {model_id}")
-        self.processor = AutoProcessor.from_pretrained(model_id)
+    # Pre-exported OpenVINO model (no PyTorch loading, no on-the-fly export needed)
+    OV_MODEL_ID = "echarlaix/SmolVLM2-500M-Video-Instruct-openvino"
+    # Original model for the processor/tokenizer
+    PROCESSOR_ID = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
 
-        # OS check to ensure we only try loading OpenVINO GPU optimizations on Windows/Intel setups
-        current_os = platform.system()
+    def __init__(self, model_id=None):
+        print(f"Initializing FocusEngine...")
         
+        self.processor = AutoProcessor.from_pretrained(self.PROCESSOR_ID)
+
         try:
-            if current_os == "Windows":
-                # High-performance target for i7-12700 + Dual GPU setup
-                print("Windows detected. Attempting to load OpenVINO model on GPU.1...")
-                self.model = OVModelForVisualCausalLM.from_pretrained(
-                    model_id, 
-                    export=True, # Set to True if model isn't pre-exported, otherwise False
-                    device="GPU.1", 
-                    ov_config={"PERFORMANCE_HINT": "LATENCY"}
-                )
-            else:
-                print(f"Non-Windows OS ({current_os}) detected. Falling back to CPU for compatibility testing.")
-                # Fallback for Mac (will use CPU instead)
-                self.model = OVModelForVisualCausalLM.from_pretrained(
-                    model_id, 
-                    export=True, 
-                    device="CPU"
-                )
+            print(f"Loading pre-exported OpenVINO model: {self.OV_MODEL_ID}")
+            self.model = OVModelForVisualCausalLM.from_pretrained(
+                self.OV_MODEL_ID,
+                device="CPU",
+                ov_config={"PERFORMANCE_HINT": "LATENCY"}
+            )
             print("Model loaded successfully.")
         except Exception as e:
-            print(f"Error loading model on desired device: {e}")
-            print("Falling back to standard CPU execution...")
-            self.model = OVModelForVisualCausalLM.from_pretrained(
-                model_id, 
-                export=True, 
-                device="CPU"
-            )
+            raise RuntimeError(f"Failed to load model: {e}") from e
 
     def capture_and_process(self, user_task):
         """
@@ -62,13 +48,13 @@ class FocusEngine:
         return result
 
     def get_prompt(self, user_task):
-        return f"""Goal: {user_task}
-Image: Desktop Screenshot
-Instructions:
-1. Identify the primary active window.
-2. Determine if the content is a tool (IDE, Terminal), research (Docs, Stack Overflow), or distraction (Social Media, YouTube, Gaming, News).
-3. If the user is in a 'Neutral' app (Browser), look at the URL or page title.
-Return purely JSON format: {{"status": "ALIGNED"|"UNALIGNED", "reasoning": "Reason here"}}"""
+        return (
+            f"Describe what you see on this screenshot in one sentence. "
+            f"Then, decide: is this related to the task \"{user_task}\"? "
+            f"Reply in this exact format:\n"
+            f"Screen: [what you see]\n"
+            f"Verdict: ALIGNED or UNALIGNED"
+        )
 
     def run_inference(self, image, task):
         prompt_text = self.get_prompt(task)
@@ -91,35 +77,64 @@ Return purely JSON format: {{"status": "ALIGNED"|"UNALIGNED", "reasoning": "Reas
 
             # Generate
             print("Running inference...")
-            generated_ids = self.model.generate(**inputs, max_new_tokens=100)
-            
-            # Decode output
-            generated_texts = self.processor.batch_decode(
-                generated_ids, skip_special_tokens=True
+            generated_ids = self.model.generate(
+                **inputs,
+                max_new_tokens=150,
+                do_sample=False,
+                repetition_penalty=1.2,
             )
             
-            # Output format looks like: "user\n[IMAGE]\n{prompt}\nassistant\n{response}"
-            # Extract just the assistant response
-            full_response = generated_texts[0]
-            assistant_response = full_response.split("assistant\n")[-1].strip()
+            # Decode only the NEW tokens (skip the input prompt tokens)
+            input_len = inputs["input_ids"].shape[-1]
+            generated_texts = self.processor.batch_decode(
+                generated_ids[:, input_len:], skip_special_tokens=True
+            )
             
-            # Attempt to parse json
-            # First, clean up any markdown formatting if the model wrapped it in ```json
-            clean_json = assistant_response.replace('```json', '').replace('```', '').strip()
+            raw_output = generated_texts[0].strip()
+            print(f"Raw model output: {raw_output}")
             
-            try:
-                result = json.loads(clean_json)
-                return result
-            except json.JSONDecodeError:
-                print(f"Failed to parse JSON. Raw output: {assistant_response}")
-                # Fallback heuristic
-                if "UNALIGNED" in assistant_response.upper():
-                    return {"status": "UNALIGNED", "reasoning": "Failed to parse JSON. Fallback to unaligned."}
-                return {"status": "ALIGNED", "reasoning": "Failed to parse JSON. Assuming aligned."}
+            return self._parse_response(raw_output)
                 
         except Exception as e:
             print(f"Inference error: {e}")
             return {"status": "ERROR", "reasoning": str(e)}
+
+    def _parse_response(self, raw_output):
+        """Extract status and reasoning from model output."""
+        status = "ALIGNED"  # default
+        reasoning = raw_output[:300]
+
+        # Try to extract the Screen: description
+        screen_match = re.search(r'Screen:\s*(.+?)(?:\n|Verdict|$)', raw_output, re.IGNORECASE | re.DOTALL)
+        if screen_match:
+            reasoning = screen_match.group(1).strip()
+
+        # Determine verdict — check negations BEFORE positive match
+        lower = raw_output.lower()
+        
+        # Check for negated alignment first (e.g., "not aligned", "not directly related")
+        negation_patterns = [
+            r"not\s+(?:\w+\s+)*aligned",   # "not aligned", "not directly aligned"
+            r"isn'?t\s+(?:\w+\s+)*aligned",
+            r"not\s+(?:\w+\s+)*related",    # "not related", "not directly related"
+            r"isn'?t\s+(?:\w+\s+)*related",
+            r"not\s+(?:\w+\s+)*focused",
+            r"off[\s-]?task", r"distract",
+        ]
+        if any(re.search(p, lower) for p in negation_patterns):
+            status = "UNALIGNED"
+        elif "UNALIGNED" in raw_output.upper():
+            status = "UNALIGNED"
+        elif "ALIGNED" in raw_output.upper():
+            status = "ALIGNED"
+        else:
+            # Keyword fallback for distraction detection
+            distraction_keywords = ["social media", "youtube", "gaming",
+                                    "entertainment", "news feed", "video game"]
+            if any(kw in lower for kw in distraction_keywords):
+                status = "UNALIGNED"
+
+        return {"status": status, "reasoning": reasoning}
 
 if __name__ == "__main__":
     # Quick test function
