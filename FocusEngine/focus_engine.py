@@ -8,9 +8,9 @@ import torch
 
 class FocusEngine:
     # Pre-exported OpenVINO model (no PyTorch loading, no on-the-fly export needed)
-    OV_MODEL_ID = "echarlaix/SmolVLM2-500M-Video-Instruct-openvino"
+    OV_MODEL_ID = "echarlaix/SmolVLM2-2.2B-Instruct-openvino"
     # Original model for the processor/tokenizer
-    PROCESSOR_ID = "HuggingFaceTB/SmolVLM2-500M-Video-Instruct"
+    PROCESSOR_ID = "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
 
     def __init__(self, model_id=None):
         print(f"Initializing FocusEngine...")
@@ -32,11 +32,16 @@ class FocusEngine:
         """
         Captures the screen, parses it through the VLM using a CoT prompt, 
         and returns the alignment status.
-        Uses 768x768 resolution for better text clarity reading code/docs.
         """
         print("Capturing screenshot...")
-        # 1. Capture & Immediate Resize (Memory Efficiency) -> 768x768 for i7-12700
-        screenshot = pyautogui.screenshot().resize((768, 768), Image.LANCZOS)
+        # Capture and resize while preserving aspect ratio (keeps text readable)
+        screenshot = pyautogui.screenshot()
+        # Scale so the longest side is at most 1280px
+        max_side = 1280
+        w, h = screenshot.size
+        scale = min(max_side / w, max_side / h, 1.0)
+        new_size = (int(w * scale), int(h * scale))
+        screenshot = screenshot.resize(new_size, Image.LANCZOS)
         
         # 2. Run Inference
         result = self.run_inference(screenshot, user_task)
@@ -49,11 +54,16 @@ class FocusEngine:
 
     def get_prompt(self, user_task):
         return (
-            f"Describe what you see on this screenshot in one sentence. "
-            f"Then, decide: is this related to the task \"{user_task}\"? "
-            f"Reply in this exact format:\n"
-            f"Screen: [what you see]\n"
-            f"Verdict: ALIGNED or UNALIGNED"
+            f"The user's current task is: \"{user_task}\"\n"
+            f"Look at this screenshot and describe the main application and content visible.\n"
+            f"Then decide if the user is working on their task or is distracted.\n"
+            f"ALIGNED means the screen shows a tool or content useful for the task "
+            f"(e.g., Word/Docs for writing, IDE for coding, browser with research for studying).\n"
+            f"UNALIGNED means the screen shows something clearly unrelated "
+            f"(e.g., games, social media, entertainment videos).\n"
+            f"Reply in this format:\n"
+            f"Screen: [describe what app and content you see]\n"
+            f"Answer: ALIGNED or UNALIGNED"
         )
 
     def run_inference(self, image, task):

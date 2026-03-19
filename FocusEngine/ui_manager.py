@@ -88,7 +88,7 @@ class UIManager:
 
         self.task_entry = tk.Entry(self.frame, width=50, font=("Helvetica", 12))
         self.task_entry.pack(pady=5)
-        self.task_entry.insert(0, "Refactoring the database module")
+ 
 
         tk.Label(
             self.frame, text="Session Length (Minutes):", bg=self.bg_color, fg=self.fg_color
