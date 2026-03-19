@@ -91,7 +91,7 @@ class FocusEngine:
                 **inputs,
                 max_new_tokens=150,
                 do_sample=False,
-                repetition_penalty=1.2,
+                # repetition_penalty=1.2,  # disabled: minimal benefit with greedy decoding on short outputs
             )
             
             # Decode only the NEW tokens (skip the input prompt tokens)
