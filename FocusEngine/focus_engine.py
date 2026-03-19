@@ -1,3 +1,9 @@
+import os
+from dotenv import load_dotenv, find_dotenv
+
+# Load environment variables from .env file
+load_dotenv(find_dotenv())
+
 import json
 import re
 import pyautogui
@@ -5,7 +11,7 @@ from PIL import Image
 from optimum.intel.openvino import OVModelForVisualCausalLM
 from transformers import AutoProcessor
 import torch
-
+# Focus Engine Class
 class FocusEngine:
     # Pre-exported OpenVINO model (no PyTorch loading, no on-the-fly export needed)
     OV_MODEL_ID = "echarlaix/SmolVLM2-2.2B-Instruct-openvino"
@@ -36,8 +42,8 @@ class FocusEngine:
         print("Capturing screenshot...")
         # Capture and resize while preserving aspect ratio (keeps text readable)
         screenshot = pyautogui.screenshot()
-        # Scale so the longest side is at most 1280px
-        max_side = 1280
+        # Scale so the longest side is at most 960px to balance RAM usage and text readability
+        max_side = 960
         w, h = screenshot.size
         scale = min(max_side / w, max_side / h, 1.0)
         new_size = (int(w * scale), int(h * scale))
@@ -47,22 +53,29 @@ class FocusEngine:
         result = self.run_inference(screenshot, user_task)
         
         # 3. Clean up RAM natively
-        # With 16GB, we rely on python's GC and Windows natural caching, no explicit windll calls.
+        import gc
         del screenshot
+        gc.collect()
         
         return result
 
     def get_prompt(self, user_task):
         return (
             f"The user's current task is: \"{user_task}\"\n"
-            f"Look at this screenshot and describe the main application and content visible.\n"
-            f"Then decide if the user is working on their task or is distracted.\n"
-            f"ALIGNED means the screen shows a tool or content useful for the task "
-            f"(e.g., Word/Docs for writing, IDE for coding, browser with research for studying).\n"
-            f"UNALIGNED means the screen shows something clearly unrelated "
-            f"(e.g., games, social media, entertainment videos).\n"
-            f"Reply in this format:\n"
-            f"Screen: [describe what app and content you see]\n"
+            f"Look at this screenshot carefully.\n"
+            f"Step 1 - Describe what application and content is visible on screen.\n"
+            f"Step 2 - Explain whether what you see is related to the task \"{user_task}\".\n"
+            f"Step 3 - Give your final verdict.\n\n"
+            f"Rules:\n"
+            f"- ALIGNED = the screen shows a tool or content useful for the task "
+            f"(e.g., code editor/IDE for programming, Word/Docs for writing, "
+            f"browser with research for studying).\n"
+            f"- UNALIGNED = the screen shows something clearly unrelated to the task "
+            f"(e.g., games, social media, entertainment videos, shopping).\n"
+            f"- When in doubt, choose ALIGNED.\n\n"
+            f"Reply EXACTLY in this format:\n"
+            f"Screen: <describe what you see>\n"
+            f"Reasoning: <why it is or is not related to \"{user_task}\">\n"
             f"Answer: ALIGNED or UNALIGNED"
         )
 
@@ -89,7 +102,7 @@ class FocusEngine:
             print("Running inference...")
             generated_ids = self.model.generate(
                 **inputs,
-                max_new_tokens=150,
+                max_new_tokens=200,
                 do_sample=False,
                 # repetition_penalty=1.2,  # disabled: minimal benefit with greedy decoding on short outputs
             )
@@ -103,6 +116,12 @@ class FocusEngine:
             raw_output = generated_texts[0].strip()
             print(f"Raw model output: {raw_output}")
             
+            # Cleanup tensors to free memory immediately
+            import gc
+            del inputs
+            del generated_ids
+            gc.collect()
+            
             return self._parse_response(raw_output)
                 
         except Exception as e:
@@ -112,12 +131,7 @@ class FocusEngine:
     def _parse_response(self, raw_output):
         """Extract status and reasoning from model output."""
         status = "ALIGNED"  # default
-        reasoning = raw_output[:300]
-
-        # Try to extract the Screen: description
-        screen_match = re.search(r'Screen:\s*(.+?)(?:\n|Verdict|$)', raw_output, re.IGNORECASE | re.DOTALL)
-        if screen_match:
-            reasoning = screen_match.group(1).strip()
+        reasoning = raw_output  # full model output, no truncation
 
         # Determine verdict — check negations BEFORE positive match
         lower = raw_output.lower()

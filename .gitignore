@@ -1,0 +1,15 @@
+*.venv
+__pycache__/
+*.cache
+
+# PyInstaller ignores
+build/
+dist/
+dist_v3/
+dist_v4/
+InstallerOutput/
+
+# App logs
+*.log
+*.cache
+*FocusEngine\build\FocusEngine

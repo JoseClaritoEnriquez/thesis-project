@@ -31,6 +31,47 @@ def create_tray_icon(ui_manager):
 
     return pystray.Icon("FocusEngine", image, "Focus Engine", menu)
 
+class SplashScreen:
+    """A minimal loading window to show while the heavy ML model is loading."""
+    def __init__(self):
+        self.root = tk.Tk()
+        self.root.title("Focus Engine")
+        
+        # Solarized-esque colors to match main UI
+        bg_color = "#fdf6e3"
+        self.root.configure(bg=bg_color)
+        
+        # Center the window on screen
+        window_width = 350
+        window_height = 150
+        screen_width = self.root.winfo_screenwidth()
+        screen_height = self.root.winfo_screenheight()
+        center_x = int(screen_width/2 - window_width / 2)
+        center_y = int(screen_height/2 - window_height / 2)
+        self.root.geometry(f'{window_width}x{window_height}+{center_x}+{center_y}')
+        
+        self.root.overrideredirect(True) # Remove window decorations for splash feel
+        self.root.attributes("-topmost", True)
+
+        main_frame = tk.Frame(self.root, bg=bg_color, highlightbackground="#b58900", highlightthickness=2)
+        main_frame.pack(expand=True, fill="both")
+
+        tk.Label(
+            main_frame, text="Focus Engine", font=("Helvetica", 16, "bold"),
+            bg=bg_color, fg="#b58900"
+        ).pack(pady=(20, 10))
+
+        self.status_label = tk.Label(
+            main_frame, text="Loading AI Model...\n(This may take up to a minute)", 
+            font=("Helvetica", 10), bg=bg_color, fg="#657b83"
+        )
+        self.status_label.pack(pady=10)
+        
+        self.root.update()
+
+    def close(self):
+        self.root.destroy()
+
 class UIManager:
     def __init__(self, start_callback, stop_callback, reset_callback):
         self.start_callback = start_callback

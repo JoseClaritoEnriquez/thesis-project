@@ -11,11 +11,19 @@ class MonitorLoop:
         self.event_queue = event_queue
         self.unaligned_counter = 0
         self.running = False
+        self._stop_event = threading.Event()
         self.user_task = ""
+        self.thread = None
         self.interval = 10 # 10s interval for i7-12700 spec
 
     def start(self, user_task):
         """Starts the background monitoring loop in a new thread."""
+        # Ensure any previous thread is fully stopped before starting a new one
+        if self.thread is not None and self.thread.is_alive():
+            print("Warning: previous monitor thread still alive, stopping it first...")
+            self.stop()
+
+        self._stop_event.clear()
         self.running = True
         self.user_task = user_task
         self.unaligned_counter = 0
@@ -24,10 +32,13 @@ class MonitorLoop:
         self.thread.start()
 
     def stop(self):
-        """Signals the background thread to stop."""
+        """Signals the background thread to stop and waits for it to finish."""
         self.running = False
-        if hasattr(self, 'thread') and self.thread.is_alive():
-            self.thread.join(timeout=2)
+        self._stop_event.set()  # Wake up the sleeping thread immediately
+        if self.thread is not None and self.thread.is_alive():
+            self.thread.join(timeout=15)  # Wait long enough for any in-flight inference
+            if self.thread.is_alive():
+                print("Warning: monitor thread did not stop within timeout.")
 
     def reset_counter(self):
         self.unaligned_counter = 0
@@ -50,8 +61,8 @@ class MonitorLoop:
         print(f"Monitoring loop started. Task: '{self.user_task}'")
         
         while self.running:
-            # IDLE state
-            time.sleep(self.interval)
+            # IDLE state — use Event.wait() so stop() can wake us immediately
+            self._stop_event.wait(timeout=self.interval)
 
             if not self.running:
                 break
