@@ -1,15 +1,44 @@
 import sys
 import os
+import subprocess
+
+def install_dependencies():
+    """Automatically install dependencies from requirements.txt if running from source."""
+    if getattr(sys, 'frozen', False):
+        return # Never run pip in a packaged executable
+        
+    req_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
+    if os.path.exists(req_file):
+        print("Checking/Installing dependencies from requirements.txt...")
+        try:
+            subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", req_file])
+        except Exception as e:
+            print(f"Auto-install failed: {e}")
+
+# Run dependency check only if not frozen
+if not getattr(sys, 'frozen', False):
+    try:
+        import dotenv
+        import openvino_genai
+        import huggingface_hub
+        import PIL
+        import numpy
+    except ImportError:
+        install_dependencies()
 
 from dotenv import load_dotenv, find_dotenv
 
 # PyInstaller creates a temp folder and stores path in _MEIPASS
 if getattr(sys, 'frozen', False):
     bundle_dir = sys._MEIPASS
-    log_file = os.path.join(os.path.dirname(sys.executable), "focus_engine.log")
+    # Use LOCALAPPDATA for logs to avoid permission issues in Program Files
+    app_data = os.environ.get('LOCALAPPDATA', os.path.expanduser('~'))
+    log_dir = os.path.join(app_data, 'FocusEngine')
+    os.makedirs(log_dir, exist_ok=True)
+    log_file = os.path.join(log_dir, "focus_engine.log")
 else:
     bundle_dir = os.path.dirname(os.path.abspath(__file__))
-    log_file = "focus_engine.log"
+    log_file = os.path.join(bundle_dir, "focus_engine.log")
 
 # When running in Pyinstaller with console=False, stdout and stderr are None.
 # Regular file objects are buffered, so prints won't show up immediately.
@@ -45,6 +74,8 @@ def main():
     # Local imports inside main() to prevent child processes from 
     # re-importing heavy ML libraries and potentially spawning more sub-processes
     from ui_manager import UIManager, SplashScreen
+    import threading
+    import queue
     
     # Initialize splash screen immediately
     splash = SplashScreen()
@@ -54,15 +85,66 @@ def main():
 
     print("Initializing Application...")
     
+    # Result queue for the background thread
+    result_queue = queue.Queue()
+
+    def _init_engine_thread():
+        try:
+            # Pass a callback that puts status updates into the splash queue
+            engine = FocusEngine(status_callback=lambda msg: splash.status_queue.put(msg))
+            result_queue.put(("SUCCESS", engine))
+        except Exception as e:
+            result_queue.put(("ERROR", e))
+
+    # Start initialization in background
+    thread = threading.Thread(target=_init_engine_thread, daemon=True)
+    thread.start()
+
+    engine_container = {"engine": None}
+
+    def _check_engine_ready():
+        try:
+            if not splash.root.winfo_exists() or splash.is_closing:
+                return
+
+            try:
+                status, value = result_queue.get_nowait()
+                if status == "SUCCESS":
+                    engine_container["engine"] = value
+                    splash.close()
+                    return
+                else:
+                    print(f"Failed to initialize Focus Engine: {value}")
+                    if splash.root.winfo_exists() and not splash.is_closing:
+                        splash.status_label.config(text=f"Error: {value}\nClosing in 5 seconds...")
+                        splash.root.after(5000, splash.close)
+            except queue.Empty:
+                # Poll again
+                if splash.root.winfo_exists() and not splash.is_closing:
+                    splash.root.after(200, _check_engine_ready)
+        except (tk.TclError, AttributeError):
+            # Window likely already gone
+            pass
+
+    # Start polling for the engine
     try:
-        engine = FocusEngine()
-    except Exception as e:
-        print(f"Failed to initialize Focus Engine: {e}")
-        splash.close()
+        splash.root.after(200, _check_engine_ready)
+    except tk.TclError:
+        pass
+    
+    # Keep the splash screen's event loop running (this is the key for responsiveness)
+    try:
+        splash.root.mainloop()
+    except (tk.TclError, KeyboardInterrupt):
+        pass
+
+    # Once splash.root.mainloop() returns (because splash.close() was called),
+    # check if we actually got an engine.
+    engine = engine_container.get("engine")
+    if not engine:
         return
 
     print("Engine Initialized.")
-    splash.close()
 
     ui = UIManager(
         start_callback=lambda task: _start_monitoring(task),
@@ -81,7 +163,7 @@ def main():
     def _reset_monitoring():
         monitor.reset_counter()
 
-    # Start the Tkinter main loop on the primary thread
+    # Start the Tkinter main loop for the main UI
     ui.run()
 
 if __name__ == "__main__":

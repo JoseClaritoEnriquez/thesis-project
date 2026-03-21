@@ -1,42 +1,59 @@
 import os
-from dotenv import load_dotenv, find_dotenv
-
-# Load environment variables from .env file
-load_dotenv(find_dotenv())
-
+import sys
 import json
 import re
 import pyautogui
+import openvino_genai as ov_genai
 from PIL import Image
-from optimum.intel.openvino import OVModelForVisualCausalLM
-from transformers import AutoProcessor
-import torch
-# Focus Engine Class
-class FocusEngine:
-    # Pre-exported OpenVINO model (no PyTorch loading, no on-the-fly export needed)
-    OV_MODEL_ID = "echarlaix/SmolVLM2-2.2B-Instruct-openvino"
-    # Original model for the processor/tokenizer
-    PROCESSOR_ID = "HuggingFaceTB/SmolVLM2-2.2B-Instruct"
+from huggingface_hub import snapshot_download
 
-    def __init__(self, model_id=None):
-        print(f"Initializing FocusEngine...")
+# Focus Engine Class (Torch-Free / OpenVINO Native)
+class FocusEngine:
+    # Pre-exported OpenVINO model directory (relative to bundle_dir)
+    MODEL_DIR = "model_openvino"
+
+    def __init__(self, model_id=None, status_callback=None):
+        def _report(msg):
+            print(msg)
+            if status_callback:
+                status_callback(msg)
+
+        _report(f"Initializing FocusEngine (OpenVINO GenAI)...")
         
-        self.processor = AutoProcessor.from_pretrained(self.PROCESSOR_ID)
+        # Determine the absolute path to the model directory
+        if getattr(sys, 'frozen', False):
+            # In packaged app, model is in _internal/model_openvino
+            self.model_path = os.path.join(sys._MEIPASS, "_internal", self.MODEL_DIR)
+        else:
+            # In dev, use the current folder or a specified path
+            self.model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), self.MODEL_DIR)
 
         try:
-            print(f"Loading pre-exported OpenVINO model: {self.OV_MODEL_ID}")
-            self.model = OVModelForVisualCausalLM.from_pretrained(
-                self.OV_MODEL_ID,
-                device="CPU",
-                ov_config={"PERFORMANCE_HINT": "LATENCY"}
-            )
-            print("Model loaded successfully.")
+            # Check if model exists AND weights are present, if not download it
+            model_xml = os.path.join(self.model_path, "openvino_language_model.xml")
+            model_bin = os.path.join(self.model_path, "openvino_language_model.bin")
+            
+            if not os.path.exists(model_xml) or not os.path.exists(model_bin):
+                _report(f"Model files not found. Starting download...")
+                os.makedirs(self.model_path, exist_ok=True)
+                snapshot_download(
+                    repo_id="helenai/Qwen2-VL-2B-Instruct-ov-int4",
+                    local_dir=self.model_path,
+                    local_dir_use_symlinks=False
+                )
+                _report("Download complete.")
+
+            _report(f"Loading OpenVINO GenAI pipeline...")
+            # VLMPipeline handles preprocessing, tokenization, and generation natively
+            self.pipeline = ov_genai.VLMPipeline(self.model_path, "CPU")
+            _report("Focus Engine Initialized successfully.")
         except Exception as e:
-            raise RuntimeError(f"Failed to load model: {e}") from e
+            _report(f"Error: Failed to load or download model: {e}")
+            raise RuntimeError(f"Failed to load VLM Pipeline: {e}") from e
 
     def capture_and_process(self, user_task):
         """
-        Captures the screen, parses it through the VLM using a CoT prompt, 
+        Captures the screen, parses it through the VLM, 
         and returns the alignment status.
         """
         print("Capturing screenshot...")
@@ -62,67 +79,56 @@ class FocusEngine:
     def get_prompt(self, user_task):
         return (
             f"The user's current task is: \"{user_task}\"\n"
-            f"Look at this screenshot carefully.\n"
-            f"Step 1 - Describe what application and content is visible on screen.\n"
-            f"Step 2 - Explain whether what you see is related to the task \"{user_task}\".\n"
-            f"Step 3 - Give your final verdict.\n\n"
+            f"Analyze the screenshot for evidence of this specific task. Avoid generic assumptions.\n\n"
             f"Rules:\n"
-            f"- ALIGNED = the screen shows a tool or content useful for the task "
-            f"(e.g., code editor/IDE for programming, Word/Docs for writing, "
-            f"browser with research for studying).\n"
-            f"- UNALIGNED = the screen shows something clearly unrelated to the task "
-            f"(e.g., games, social media, entertainment videos, shopping).\n"
-            f"- When in doubt, choose ALIGNED.\n\n"
-            f"Reply EXACTLY in this format:\n"
-            f"Screen: <describe what you see>\n"
-            f"Reasoning: <why it is or is not related to \"{user_task}\">\n"
+            f"- ALIGNED: The screen shows clear evidence of tools, documents, or content directly supporting the task \"{user_task}\".\n"
+            f"- UNALIGNED: The screen shows content unrelated to the specific task (e.g., entertainment, social media, or a completely different work task).\n"
+            f"- Be critical. Do not assume a connection exists (e.g., 'programming' is not 'chatting' unless you see chat-specific code).\n"
+            f"- If there is no clear evidence of the specific task, choose UNALIGNED.\n\n"
+            f"Reply in this format:\n"
+            f"Visible Evidence: <list specific UI elements, text, or apps seen>\n"
+            f"Reasoning: <explain why the evidence supports or contradicts the task \"{user_task}\">\n"
             f"Answer: ALIGNED or UNALIGNED"
         )
 
     def run_inference(self, image, task):
         prompt_text = self.get_prompt(task)
         
-        # Format the messages following the processor's chat template
-        messages = [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "image"},
-                    {"type": "text", "text": prompt_text}
-                ]
-            }
-        ]
-
         try:
-            # Process inputs
-            prompt = self.processor.apply_chat_template(messages, add_generation_prompt=True)
-            inputs = self.processor(text=prompt, images=[image], return_tensors="pt")
+            # 2. Run Inference
+            # Convert PIL image to openvino.Tensor (v2026.0+ removes ov_genai.Image)
+            import numpy as np
+            import openvino as ov
+            
+            # Ensure RGB and convert to numpy
+            ov_image = ov.Tensor(np.array(image.convert("RGB")))
+            
+            print("Running native OpenVINO inference...")
+            # Simple greedy generation
+            config = ov_genai.GenerationConfig()
+            config.max_new_tokens = 200
+            
+            # Run native OpenVINO inference
+            raw_output = self.pipeline.generate(
+                prompt_text,
+                image=ov_image,
+                generation_config=config
+            )
+            
+            # Extract text from result object (v2026.0 returns VLMDecodedResults)
+            if hasattr(raw_output, 'texts') and len(raw_output.texts) > 0:
+                raw_output_text = raw_output.texts[0]
+            else:
+                raw_output_text = str(raw_output)
 
-            # Generate
-            print("Running inference...")
-            generated_ids = self.model.generate(
-                **inputs,
-                max_new_tokens=200,
-                do_sample=False,
-                # repetition_penalty=1.2,  # disabled: minimal benefit with greedy decoding on short outputs
-            )
+            print(f"Raw model output (text): {raw_output_text}")
             
-            # Decode only the NEW tokens (skip the input prompt tokens)
-            input_len = inputs["input_ids"].shape[-1]
-            generated_texts = self.processor.batch_decode(
-                generated_ids[:, input_len:], skip_special_tokens=True
-            )
-            
-            raw_output = generated_texts[0].strip()
-            print(f"Raw model output: {raw_output}")
-            
-            # Cleanup tensors to free memory immediately
+            # Cleanup
             import gc
-            del inputs
-            del generated_ids
+            del ov_image
             gc.collect()
             
-            return self._parse_response(raw_output)
+            return self._parse_response(raw_output_text)
                 
         except Exception as e:
             print(f"Inference error: {e}")
@@ -131,20 +137,26 @@ class FocusEngine:
     def _parse_response(self, raw_output):
         """Extract status and reasoning from model output."""
         status = "ALIGNED"  # default
-        reasoning = raw_output  # full model output, no truncation
+        reasoning = raw_output 
 
-        # Determine verdict — check negations BEFORE positive match
+        # 1. Primary Check: Look for the 'Answer:' field explicitly
+        match = re.search(r"Answer:\s*(ALIGNED|UNALIGNED)", raw_output, re.IGNORECASE)
+        if match:
+            status = match.group(1).upper()
+            return {"status": status, "reasoning": reasoning}
+
+        # 2. Fallback: Determine verdict via keyword and negation analysis
         lower = raw_output.lower()
         
-        # Check for negated alignment first (e.g., "not aligned", "not directly related")
         negation_patterns = [
-            r"not\s+(?:\w+\s+)*aligned",   # "not aligned", "not directly aligned"
+            r"not\s+(?:\w+\s+)*aligned",
             r"isn'?t\s+(?:\w+\s+)*aligned",
-            r"not\s+(?:\w+\s+)*related",    # "not related", "not directly related"
+            r"not\s+(?:\w+\s+)*related",
             r"isn'?t\s+(?:\w+\s+)*related",
             r"not\s+(?:\w+\s+)*focused",
             r"off[\s-]?task", r"distract",
         ]
+        
         if any(re.search(p, lower) for p in negation_patterns):
             status = "UNALIGNED"
         elif "UNALIGNED" in raw_output.upper():

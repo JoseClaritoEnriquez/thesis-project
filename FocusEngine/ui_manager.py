@@ -36,14 +36,17 @@ class SplashScreen:
     def __init__(self):
         self.root = tk.Tk()
         self.root.title("Focus Engine")
+        self.status_queue = queue.Queue()
+        self.after_id = None
+        self.is_closing = False
         
         # Solarized-esque colors to match main UI
         bg_color = "#fdf6e3"
         self.root.configure(bg=bg_color)
         
         # Center the window on screen
-        window_width = 350
-        window_height = 150
+        window_width = 400
+        window_height = 200
         screen_width = self.root.winfo_screenwidth()
         screen_height = self.root.winfo_screenheight()
         center_x = int(screen_width/2 - window_width / 2)
@@ -57,26 +60,71 @@ class SplashScreen:
         main_frame.pack(expand=True, fill="both")
 
         tk.Label(
-            main_frame, text="Focus Engine", font=("Helvetica", 16, "bold"),
+            main_frame, text="Focus Engine", font=("Helvetica", 18, "bold"),
             bg=bg_color, fg="#b58900"
-        ).pack(pady=(20, 10))
+        ).pack(pady=(30, 10))
 
         self.status_label = tk.Label(
             main_frame, text="Loading AI Model...\n(This may take up to a minute)", 
-            font=("Helvetica", 10), bg=bg_color, fg="#657b83"
+            font=("Helvetica", 10), bg=bg_color, fg="#657b83", wraplength=350
         )
         self.status_label.pack(pady=10)
         
-        self.root.update()
+        try:
+            self.after_id = self.root.after(100, self._check_status)
+            self.root.update()
+        except tk.TclError:
+            pass
+
+    def _check_status(self):
+        """Periodically check the queue for status updates."""
+        if self.is_closing:
+            return
+            
+        try:
+            if not self.root.winfo_exists():
+                return
+            
+            while True:
+                msg = self.status_queue.get_nowait()
+                if msg == "CLOSE":
+                    self.close()
+                    return
+                self.status_label.config(text=msg)
+        except (queue.Empty, tk.TclError, AttributeError):
+            pass
+            
+        try:
+            if not self.is_closing and self.root.winfo_exists():
+                self.after_id = self.root.after(100, self._check_status)
+        except (tk.TclError, AttributeError):
+            pass
 
     def close(self):
-        self.root.destroy()
+        """Safely closes the splash screen."""
+        if self.is_closing:
+            return
+        self.is_closing = True
+        
+        if self.after_id:
+            try:
+                self.root.after_cancel(self.after_id)
+            except:
+                pass
+            self.after_id = None
+            
+        try:
+            if self.root.winfo_exists():
+                self.root.destroy()
+        except:
+            pass
 
 class UIManager:
     def __init__(self, start_callback, stop_callback, reset_callback):
         self.start_callback = start_callback
         self.stop_callback = stop_callback
         self.reset_callback = reset_callback
+        self.is_closing = False
         
         self.status_queue = queue.Queue()
         self.event_queue = queue.Queue()
@@ -101,7 +149,10 @@ class UIManager:
         self._build_setup_view()
         
         # Periodic UI update to check queues without blocking Tk mainloop
-        self.root.after(100, self._process_queues)
+        try:
+            self.root.after(100, self._process_queues)
+        except tk.TclError:
+            pass
         
         # Handle window deletion (closing redirects to tray)
         self.root.protocol("WM_DELETE_WINDOW", self.hide_to_tray)
@@ -303,48 +354,65 @@ class UIManager:
             self.tray_icon = None
 
     def exit_app(self):
+        self.is_closing = True
         self.stop_callback()
         if self.tray_icon:
             self.tray_icon.stop()
-        self.root.quit()
+        try:
+            self.root.quit()
+            self.root.destroy()
+        except:
+            pass
         sys.exit(0)
 
     def trigger_intervention(self, task, reasoning):
         """Displays the 'Nudge' full-screen topmost modal."""
+        if self.is_closing:
+            return
+            
         # Solarized Dark / High contrast Red
-        modal = tk.Toplevel(self.root)
-        modal.attributes("-topmost", True)
-        modal.attributes("-fullscreen", True)
-        modal.configure(bg="#dc322f") # Red background
-        
-        modal.focus_force()
+        try:
+            modal = tk.Toplevel(self.root)
+            modal.attributes("-topmost", True)
+            modal.attributes("-fullscreen", True)
+            modal.configure(bg="#dc322f") # Red background
+            
+            modal.focus_force()
 
-        frame = tk.Frame(modal, bg="#dc322f")
-        frame.place(relx=0.5, rely=0.5, anchor="center")
+            frame = tk.Frame(modal, bg="#dc322f")
+            frame.place(relx=0.5, rely=0.5, anchor="center")
 
-        tk.Label(
-            frame, text=f"Are you still focusing on:\n'{task}'?",
-            font=("Helvetica", 32, "bold"), fg="#fdf6e3", bg="#dc322f", justify="center"
-        ).pack(pady=20)
-        
-        tk.Label(
-            frame, text=f"Reason: {reasoning}",
-            font=("Helvetica", 18), fg="#eee8d5", bg="#dc322f", justify="center", wraplength=800
-        ).pack(pady=10)
+            tk.Label(
+                frame, text=f"Are you still focusing on:\n'{task}'?",
+                font=("Helvetica", 32, "bold"), fg="#fdf6e3", bg="#dc322f", justify="center"
+            ).pack(pady=20)
+            
+            tk.Label(
+                frame, text=f"Reason: {reasoning}",
+                font=("Helvetica", 18), fg="#eee8d5", bg="#dc322f", justify="center", wraplength=800
+            ).pack(pady=10)
 
-        def on_return():
-            self.reset_callback()
-            modal.destroy()
+            def on_return():
+                self.reset_callback()
+                modal.destroy()
 
-        btn = tk.Button(
-            frame, text="✅ I'm back on track!", font=("Helvetica", 24, "bold"),
-            bg="#859900", fg="black", command=on_return, padx=20, pady=10
-        )
-        btn.pack(pady=40)
+            btn = tk.Button(
+                frame, text="✅ I'm back on track!", font=("Helvetica", 24, "bold"),
+                bg="#859900", fg="black", command=on_return, padx=20, pady=10
+            )
+            btn.pack(pady=40)
+        except tk.TclError:
+            pass
 
     def _process_queues(self):
         """Reads from queues to update UI based on AI worker thread state."""
+        if self.is_closing:
+            return
+            
         try:
+            if not self.root.winfo_exists():
+                return
+                
             while True:
                 event = self.event_queue.get_nowait()
                 event_type = event.get("type")
@@ -356,6 +424,8 @@ class UIManager:
                     self.trigger_intervention(event.get("task"), event.get("reason"))
         except queue.Empty:
             pass
+        except (tk.TclError, AttributeError):
+            return
 
         # Also check status_queue for counter updates
         try:
@@ -366,8 +436,17 @@ class UIManager:
                     self.counter_label.config(text=f"Distractions: {self.unaligned_count}")
         except queue.Empty:
             pass
+        except (tk.TclError, AttributeError):
+            return
 
-        self.root.after(100, self._process_queues)
+        try:
+            if not self.is_closing and self.root.winfo_exists():
+                self.root.after(100, self._process_queues)
+        except (tk.TclError, AttributeError):
+            pass
 
     def run(self):
-        self.root.mainloop()
+        try:
+            self.root.mainloop()
+        except (tk.TclError, KeyboardInterrupt):
+            pass

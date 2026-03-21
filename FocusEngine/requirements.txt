@@ -1,15 +1,14 @@
 # --- Core UI and System ---
-pyautogui==0.9.54       # Screen capture
-pillow==10.2.0          # Image resizing and processing
-psutil==5.9.8           # CPU monitoring and process priority
-pystray==0.19.5         # System tray icon
+pyautogui>=0.9.54       # Screen capture
+pillow>=11.0.0          # Image resizing and processing (Updated for Python 3.14)
+psutil>=5.9.8           # CPU monitoring and process priority
+pystray>=0.19.5         # System tray icon
 
-# --- AI & Inference Stack (Windows/Intel Optimized) ---
-openvino==2024.0.0      # Core Intel inference engine
-optimum-intel[openvino] # Hugging Face integration for OpenVINO
-transformers==4.38.0    # Model loading and tokenization
-accelerate==0.27.2      # Optimization utilities
+# --- AI & Inference Stack (Torch-Free / OpenVINO Native) ---
+openvino>=2024.0.0
+openvino-genai>=2026.0.0.0
 
 # --- Utilities ---
-numpy<2.0.0             # Required for tensor manipulation
-python-dotenv==1.0.1    # For local environment privacy flags
+numpy                   # Required for tensor manipulation (Relaxed <2.0.0 for Python 3.14)
+python-dotenv>=1.0.1    # For local environment privacy flags
+huggingface_hub         # For model downloading

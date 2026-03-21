@@ -18,6 +18,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 [Files]
 ; Grab everything from the PyInstaller Dist Folder
 Source: "dist\FocusEngine\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+; Add a note to help users find the VC++ Redistributable if the app fails to start
+Source: "README_INSTALL.txt"; DestDir: "{app}"; Flags: isreadme
 
 [Icons]
 Name: "{group}\Focus Engine"; Filename: "{app}\FocusEngine.exe"
