@@ -167,13 +167,59 @@ def main():
 
     print("Engine Initialized.")
 
+    def _handle_settings_changed():
+        """Called when device is changed in settings."""
+        nonlocal engine
+        print("Settings changed. Reloading engine...")
+        
+        # Stop monitoring if active
+        monitor.stop()
+        
+        # Re-initialize engine with splash screen
+        new_splash = SplashScreen(parent=ui.root)
+        
+        new_device = config_manager.get_device()
+        
+        def _reinit_thread():
+            try:
+                new_engine = FocusEngine(
+                    model_path=model_path,
+                    status_callback=lambda msg: new_splash.status_queue.put(msg),
+                    device=new_device
+                )
+                result_queue.put(("SUCCESS", new_engine))
+            except Exception as e:
+                result_queue.put(("ERROR", e))
+
+        threading.Thread(target=_reinit_thread, daemon=True).start()
+
+        def _check_reinit_ready():
+            try:
+                status, value = result_queue.get_nowait()
+                if status == "SUCCESS":
+                    nonlocal engine
+                    engine = value
+                    monitor.engine = engine # Update monitor with new engine
+                    monitor.device = new_device # Update monitor with new device string
+                    new_splash.close()
+                    ui._build_setup_view() # Return to main view
+                else:
+                    print(f"Failed to reload engine: {value}")
+                    new_splash.status_label.config(text=f"Error: {value}")
+                    ui.root.after(3000, new_splash.close)
+            except queue.Empty:
+                ui.root.after(200, _check_reinit_ready)
+
+        ui.root.after(200, _check_reinit_ready)
+
     ui = UIManager(
         start_callback=lambda task: _start_monitoring(task),
         stop_callback=lambda: _stop_monitoring(),
-        reset_callback=lambda: _reset_monitoring()
+        reset_callback=lambda: _reset_monitoring(),
+        settings_changed_callback=_handle_settings_changed
     )
 
-    monitor = MonitorLoop(engine, ui.status_queue, ui.event_queue)
+    monitor = MonitorLoop(engine, ui.status_queue, ui.event_queue, device=config_manager.get_device())
 
     def _start_monitoring(task):
         monitor.start(task)

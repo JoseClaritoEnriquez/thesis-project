@@ -1,3 +1,4 @@
+import os
 import tkinter as tk
 from tkinter import ttk, filedialog
 import queue
@@ -61,9 +62,22 @@ class SplashScreen:
         
         self.root.overrideredirect(True) # Remove window decorations for splash feel
         self.root.attributes("-topmost", True)
+        
+        # Make the window draggable
+        self._drag_data = {"x": 0, "y": 0}
+        self.root.bind("<Button-1>", self._start_drag)
+        self.root.bind("<B1-Motion>", self._do_drag)
 
         main_frame = tk.Frame(self.root, bg=bg_color, highlightbackground="#b58900", highlightthickness=2)
         main_frame.pack(expand=True, fill="both")
+
+        # Minimize button
+        min_btn = tk.Button(
+            main_frame, text="—", font=("Helvetica", 10, "bold"),
+            bg=bg_color, fg="#657b83", relief="flat", cursor="hand2",
+            command=self._minimize, padx=5
+        )
+        min_btn.place(relx=1.0, rely=0.0, anchor="ne", x=-5, y=5)
 
         tk.Label(
             main_frame, text="Focus Engine", font=("Helvetica", 18, "bold"),
@@ -110,6 +124,31 @@ class SplashScreen:
         """Thread-safe status update."""
         self.status_queue.put(msg)
 
+    def _start_drag(self, event):
+        """Remembers the starting point of a drag."""
+        self._drag_data["x"] = event.x
+        self._drag_data["y"] = event.y
+
+    def _do_drag(self, event):
+        """Moves the window based on mouse motion."""
+        x = self.root.winfo_x() - self._drag_data["x"] + event.x
+        y = self.root.winfo_y() - self._drag_data["y"] + event.y
+        self.root.geometry(f"+{x}+{y}")
+
+    def _minimize(self):
+        """Minimizes the splash screen and ensures it shows in the taskbar."""
+        self.root.update_idletasks()
+        self.root.withdraw()
+        self.root.overrideredirect(False)
+        self.root.state('iconic')
+        self.root.deiconify()
+        self.root.bind("<Map>", self._on_map)
+
+    def _on_map(self, event):
+        """Restores overrideredirect when coming back from minimized state."""
+        self.root.overrideredirect(True)
+        self.root.unbind("<Map>")
+
     def close(self):
         """Safely closes the splash screen."""
         if self.is_closing:
@@ -139,10 +178,11 @@ class UIManager:
         root.destroy()
         return path
 
-    def __init__(self, start_callback, stop_callback, reset_callback):
+    def __init__(self, start_callback, stop_callback, reset_callback, settings_changed_callback):
         self.start_callback = start_callback
         self.stop_callback = stop_callback
         self.reset_callback = reset_callback
+        self.settings_changed_callback = settings_changed_callback
         self.is_closing = False
         
         self.status_queue = queue.Queue()
@@ -158,12 +198,20 @@ class UIManager:
         self.fg_color = "#657b83"
         self.root.configure(bg=self.bg_color)
         
-        self.tray_icon = None
-        self.frame = None
-        self.timer_id = None
+        self.tray_icon: pystray.Icon = None  # type: ignore
+        self.frame: tk.Frame = None  # type: ignore
+        self.timer_id: str = None  # type: ignore
         self.remaining_seconds = 0
         self.session_task = ""
         self.unaligned_count = 0
+        self.total_unaligned_count = 0
+        
+        # UI Elements defined in views
+        self.status_label: tk.Label = None  # type: ignore
+        self.counter_label: tk.Label = None  # type: ignore
+        self.total_counter_label: tk.Label = None  # type: ignore
+        self.timer_label: tk.Label = None  # type: ignore
+        self.stop_button: tk.Button = None  # type: ignore
         
         self._build_setup_view()
         
@@ -288,7 +336,10 @@ class UIManager:
         if new_device != old_device:
             config_manager.set_device(new_device)
             # Notify main to reload engine
-            self.settings_changed_callback()
+            if self.settings_changed_callback:
+                self.settings_changed_callback()
+            else:
+                self._build_setup_view()
         else:
             self._build_setup_view()
 
@@ -305,6 +356,7 @@ class UIManager:
         self.session_task = task
         self.remaining_seconds = minutes * 60
         self.unaligned_count = 0
+        self.total_unaligned_count = 0
         
         # Start AI worker
         self.start_callback(task)
@@ -351,10 +403,16 @@ class UIManager:
         self.status_label.pack(side="left")
 
         self.counter_label = tk.Label(
-            info_frame, text="Distractions: 0", bg=self.bg_color, fg=self.fg_color,
+            info_frame, text="Nudge Counter: 0/6", bg=self.bg_color, fg=self.fg_color,
             font=("Helvetica", 10)
         )
-        self.counter_label.pack(side="right")
+        self.counter_label.pack(side="left", padx=(20, 0))
+
+        self.total_counter_label = tk.Label(
+            info_frame, text="Total Distractions: 0", bg=self.bg_color, fg=self.fg_color,
+            font=("Helvetica", 10)
+        )
+        self.total_counter_label.pack(side="right")
 
         # Stop button
         self.stop_button = tk.Button(
@@ -399,6 +457,39 @@ class UIManager:
         # Show results
         self._build_results_view()
 
+    def _on_error(self, message):
+        """Stops the session and shows an error message."""
+        if self.timer_id:
+            try:
+                self.root.after_cancel(self.timer_id)
+            except:
+                pass
+            self.timer_id = None
+        self.stop_callback()
+        self._build_error_view(message)
+
+    def _build_error_view(self, message):
+        """Shows a failure summary when monitoring crashes."""
+        self._clear_frame()
+        self.frame = tk.Frame(self.root, bg=self.bg_color, padx=20, pady=20)
+        self.frame.pack(expand=True, fill="both")
+
+        tk.Label(
+            self.frame, text="Monitoring Failed", font=("Helvetica", 18, "bold"),
+            bg=self.bg_color, fg="#dc322f"
+        ).pack(pady=(0, 20))
+
+        tk.Label(
+            self.frame, text=message,
+            font=("Helvetica", 11), bg=self.bg_color, fg=self.fg_color,
+            wraplength=400, justify="center"
+        ).pack(pady=20)
+
+        tk.Button(
+            self.frame, text="Back to Setup", bg="#2aa198", fg="black",
+            font=("Helvetica", 12, "bold"), command=self._build_setup_view
+        ).pack(pady=10, fill="x")
+
     def _build_results_view(self):
         """Shows a summary after the session ends."""
         self._clear_frame()
@@ -417,7 +508,7 @@ class UIManager:
         ).pack(anchor="w", pady=5)
 
         tk.Label(
-            self.frame, text=f"Distractions detected: {self.unaligned_count}",
+            self.frame, text=f"Total distractions in session: {self.total_unaligned_count}",
             font=("Helvetica", 12), bg=self.bg_color, fg=self.fg_color
         ).pack(anchor="w", pady=5)
 
@@ -454,7 +545,10 @@ class UIManager:
             self.root.destroy()
         except:
             pass
-        sys.exit(0)
+        
+        # Hard exit to ensure no background threads or child processes 
+        # (like OpenVINO or Hugging Face) keep the process alive on Windows.
+        os._exit(0)
 
     def trigger_intervention(self, task, reasoning):
         """Displays the 'Nudge' full-screen topmost modal."""
@@ -513,6 +607,8 @@ class UIManager:
                         self.status_label.config(text=f"Status: {event.get('value')}")
                 elif event_type == "INTERVENTION":
                     self.trigger_intervention(event.get("task"), event.get("reason"))
+                elif event_type == "ERROR":
+                    self._on_error(event.get("value"))
         except queue.Empty:
             pass
         except (tk.TclError, AttributeError):
@@ -523,8 +619,13 @@ class UIManager:
             while True:
                 status = self.status_queue.get_nowait()
                 self.unaligned_count = status.get("counter", self.unaligned_count)
+                self.total_unaligned_count = status.get("total_counter", self.total_unaligned_count)
+                
                 if hasattr(self, 'counter_label') and self.counter_label.winfo_exists():
-                    self.counter_label.config(text=f"Distractions: {self.unaligned_count}")
+                    self.counter_label.config(text=f"Nudge Counter: {self.unaligned_count}/6")
+                
+                if hasattr(self, 'total_counter_label') and self.total_counter_label.winfo_exists():
+                    self.total_counter_label.config(text=f"Total Distractions: {self.total_unaligned_count}")
         except queue.Empty:
             pass
         except (tk.TclError, AttributeError):

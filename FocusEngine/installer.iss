@@ -17,8 +17,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "startup"; Description: "Launch Focus Engine on Windows Startup"; GroupDescription: "Additional options:"; Flags: unchecked
 
 [Files]
-Source: "dist\FocusEngine\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "README_INSTALL.txt"; DestDir: "{app}"; Flags: isreadme
+Source: "{#SourcePath}\..\dist\FocusEngine\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SourcePath}\README_INSTALL.txt"; DestDir: "{app}"; Flags: isreadme
 
 [Icons]
 Name: "{group}\Focus Engine"; Filename: "{app}\FocusEngine.exe"

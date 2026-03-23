@@ -110,11 +110,31 @@ class FocusEngine:
 
             _report(f"Loading OpenVINO GenAI pipeline on {device}...")
             # VLMPipeline handles preprocessing, tokenization, and generation natively
-            self.pipeline = ov_genai.VLMPipeline(self.model_path, device)
+            try:
+                # Optimized configuration for Intel GPU stability
+                ov_config = {}
+                if "GPU" in device.upper():
+                    ov_config = {
+                        "CACHE_DIR": os.path.join(self.model_path, "ov_cache"),
+                        # Avoid USM reordering issues that cause ocl_stream errors
+                        "GPU_DISABLE_REORDER_MERGING": "YES"
+                    }
+                
+                self.pipeline = ov_genai.VLMPipeline(self.model_path, device, **ov_config)
+            except Exception as e:
+                if device.upper() != "CPU":
+                    _report(f"Warning: Failed to load on {device}: {e}")
+                    _report("Falling back to CPU...")
+                    self.pipeline = ov_genai.VLMPipeline(self.model_path, "CPU")
+                    # Persist the fallback so future starts use CPU directly
+                    config_manager.set_device("CPU")
+                else:
+                    raise e
+
             _report("Focus Engine Initialized successfully.")
         except Exception as e:
             _report(f"Error: Failed to load or download model: {e}")
-            raise RuntimeError(f"Failed to load VLM Pipeline: {e}") from e
+            raise RuntimeError(f"Failed to initialize Focus Engine: {e}") from e
 
     def capture_and_process(self, user_task):
         """
@@ -140,6 +160,12 @@ class FocusEngine:
                 "Negative Constraint: DO NOT use headers, bullets, or labels like 'key points:'."
             )
             description = self.run_inference(vision_prompt, image=screenshot)
+            
+            # If Pass 1 fails, stop immediately to prevent GenAI state corruption in Pass 2
+            if isinstance(description, dict) and description.get("status") == "ERROR":
+                print(f"Pass 1 failed: {description.get('reasoning')}")
+                return description
+
             print(f"Screen Description: {description}")
 
             # Pass 2: Logic - Verdict based on Description (TEXT ONLY)
@@ -181,7 +207,9 @@ class FocusEngine:
                 import openvino as ov
                 
                 # Ensure RGB and convert to numpy
-                ov_image = ov.Tensor(np.array(image.convert("RGB")))
+                # We use an explicit numpy array to avoid shared memory issues on GPU
+                img_np = np.array(image.convert("RGB")).copy()
+                ov_image = ov.Tensor(img_np)
             
             print(f"Running OpenVINO inference (image={'PRESENT' if ov_image else 'NONE'})...")
             # Generation settings

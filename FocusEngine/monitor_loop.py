@@ -11,6 +11,7 @@ class MonitorLoop:
         self.status_queue = status_queue
         self.event_queue = event_queue
         self.unaligned_counter = 0
+        self.total_distractions = 0
         self.running = False
         self._stop_event = threading.Event()
         self.user_task = ""
@@ -28,6 +29,7 @@ class MonitorLoop:
         self.running = True
         self.user_task = user_task
         self.unaligned_counter = 0
+        self.total_distractions = 0
 
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
         self.thread.start()
@@ -81,14 +83,29 @@ class MonitorLoop:
                 status = result.get("status", "UNKNOWN")
                 reasoning = result.get("reasoning", "")
                 
+                if status == "ERROR":
+                    print(f"Critical error in inference: {reasoning}")
+                    self.running = False
+                    self.event_queue.put({"type": "ERROR", "value": f"Monitoring Failed: {reasoning}"})
+                    break
+
                 self._log_status(status, latency_ms)
                 
                 if status == "UNALIGNED":
                     self.unaligned_counter += 1
-                    print(f"[UNALIGNED] Count: {self.unaligned_counter}. Reason: {reasoning}")
+                    self.total_distractions += 1
+                    print(f"[UNALIGNED] Count: {self.unaligned_counter} (Total: {self.total_distractions}). Reason: {reasoning}")
                 else:
                     self.unaligned_counter = 0
                     print(f"[ALIGNED] Resetting counter. Reason: {reasoning}")
+
+                # Always update the status queue for metrics
+                self.status_queue.put({
+                    "status": status,
+                    "counter": self.unaligned_counter,
+                    "total_counter": self.total_distractions,
+                    "latency": latency_ms
+                })
 
                 # Check if we need to trigger an intervention (>= 6)
                 if self.unaligned_counter >= 6:
@@ -98,15 +115,8 @@ class MonitorLoop:
                         "task": self.user_task,
                         "reason": reasoning
                     })
-                    # We might pause here until the UI resets us, 
-                    # but we can rely on the UI calling self.reset_counter()
                 else:
                     self.event_queue.put({"type": "STATE", "value": f"IDLE ({self.device})"})
-                    self.status_queue.put({
-                        "status": status,
-                        "counter": self.unaligned_counter,
-                        "latency": latency_ms
-                    })
 
             except Exception as e:
                 print(f"Error in monitor loop: {e}")
