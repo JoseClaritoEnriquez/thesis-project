@@ -1,4 +1,5 @@
 {
-    "device": "CPU",
-    "model_path": "E:\\Models\\FocusEngineModel"
+    "device": "GPU",
+    "model_path": "C:/Users/user/Documents/jace",
+    "backend": "auto"
 }

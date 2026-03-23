@@ -26,7 +26,11 @@ def load_config():
             print(f"Error loading config: {e}")
     
     # Default config
-    return {"device": "CPU", "model_path": None}
+    return {
+        "device": "CPU", 
+        "model_path": None,
+        "backend": "auto" # "auto", "openvino", or "llama-cpp" (replaces transformers)
+    }
 
 def save_config(config):
     path = get_config_path()
@@ -45,9 +49,21 @@ def set_device(device):
     save_config(config)
 
 def get_model_path():
-    return load_config().get("model_path")
+    path = load_config().get("model_path")
+    if path and not os.path.exists(path):
+        print(f"Configured model path does not exist: {path}")
+        return None
+    return path
 
 def set_model_path(path):
     config = load_config()
     config["model_path"] = path
+    save_config(config)
+
+def get_backend():
+    return load_config().get("backend", "auto")
+
+def set_backend(backend):
+    config = load_config()
+    config["backend"] = backend
     save_config(config)

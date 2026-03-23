@@ -55,3 +55,5 @@ Thumbs.db
 # check_*.py
 # search_*.py
 # verify_*.py
+/Qwen2.5-VL-3B-Instruct
+/venv_cuda

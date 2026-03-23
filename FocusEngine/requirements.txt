@@ -1,14 +1,14 @@
 # --- Core UI and System ---
 pyautogui>=0.9.54       # Screen capture
-pillow>=11.0.0          # Image resizing and processing (Updated for Python 3.14)
+pillow>=11.0.0          # Image resizing and processing
 psutil>=5.9.8           # CPU monitoring and process priority
 pystray>=0.19.5         # System tray icon
+# llama-cpp-python Stack (New Lightweight GGUF Backend)
+llama-cpp-python>=0.3.0
+huggingface_hub         # For model downloading
 
-# --- AI & Inference Stack (Torch-Free / OpenVINO Native) ---
-openvino>=2024.0.0
-openvino-genai>=2026.0.0.0
 
 # --- Utilities ---
-numpy                   # Required for tensor manipulation (Relaxed <2.0.0 for Python 3.14)
+numpy                   # Required for tensor manipulation
 python-dotenv>=1.0.1    # For local environment privacy flags
 huggingface_hub         # For model downloading
