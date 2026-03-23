@@ -1,8 +1,8 @@
 from huggingface_hub import snapshot_download
 import os
 
-model_id = "helenai/Qwen2-VL-2B-Instruct-ov-int4"
-target_dir = os.path.join(os.getcwd(), "model_openvino")
+model_id = "helenai/Qwen3-VL-2B-Instruct-int4"
+target_dir = os.path.join(os.getcwd(), "model_qwen3_ov_int4")
 
 print(f"Downloading complete OpenVINO model {model_id}...")
 print(f"Target directory: {target_dir}")
