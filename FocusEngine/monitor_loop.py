@@ -11,6 +11,7 @@ class MonitorLoop:
         self.event_queue = event_queue
         self.unaligned_counter = 0
         self.running = False
+        self.paused = False
         self._stop_event = threading.Event()
         self.user_task = ""
         self.thread = None
@@ -34,11 +35,23 @@ class MonitorLoop:
     def stop(self):
         """Signals the background thread to stop and waits for it to finish."""
         self.running = False
+        self.paused = False
         self._stop_event.set()  # Wake up the sleeping thread immediately
         if self.thread is not None and self.thread.is_alive():
             self.thread.join(timeout=15)  # Wait long enough for any in-flight inference
             if self.thread.is_alive():
                 print("Warning: monitor thread did not stop within timeout.")
+
+    def pause(self):
+        """Pauses the monitoring loop."""
+        self.paused = True
+        print("Monitoring paused.")
+
+    def resume(self):
+        """Resumes the monitoring loop."""
+        self.paused = False
+        self._stop_event.set() # Wake up if sleeping
+        print("Monitoring resumed.")
 
     def reset_counter(self):
         self.unaligned_counter = 0
@@ -63,9 +76,13 @@ class MonitorLoop:
         while self.running:
             # IDLE state — use Event.wait() so stop() can wake us immediately
             self._stop_event.wait(timeout=self.interval)
+            self._stop_event.clear() # Reset for next wait
 
             if not self.running:
                 break
+            
+            if self.paused:
+                continue
 
             # CAPTURE & INFER state
             start_time = time.time()

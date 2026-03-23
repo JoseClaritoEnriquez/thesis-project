@@ -120,11 +120,14 @@ class SplashScreen:
             pass
 
 class UIManager:
-    def __init__(self, start_callback, stop_callback, reset_callback):
+    def __init__(self, start_callback, stop_callback, reset_callback, pause_callback, resume_callback):
         self.start_callback = start_callback
         self.stop_callback = stop_callback
         self.reset_callback = reset_callback
+        self.pause_callback = pause_callback
+        self.resume_callback = resume_callback
         self.is_closing = False
+        self.paused = False
         
         self.status_queue = queue.Queue()
         self.event_queue = queue.Queue()
@@ -214,6 +217,7 @@ class UIManager:
         self.session_task = task
         self.remaining_seconds = minutes * 60
         self.unaligned_count = 0
+        self.paused = False
         
         # Start AI worker
         self.start_callback(task)
@@ -265,12 +269,21 @@ class UIManager:
         )
         self.counter_label.pack(side="right")
 
-        # Stop button
+        # Pause/Stop button row
+        btn_frame = tk.Frame(self.frame, bg=self.bg_color)
+        btn_frame.pack(fill="x", pady=10)
+
+        self.pause_button = tk.Button(
+            btn_frame, text="Pause Session", bg="#b58900", fg="black",
+            font=("Helvetica", 12, "bold"), command=self._on_pause_toggle
+        )
+        self.pause_button.pack(side="left", fill="x", expand=True, padx=(0, 5))
+
         self.stop_button = tk.Button(
-            self.frame, text="Stop Session", bg="#dc322f", fg="white",
+            btn_frame, text="Stop Session", bg="#dc322f", fg="white",
             font=("Helvetica", 12, "bold"), command=self._on_stop
         )
-        self.stop_button.pack(pady=10, fill="x")
+        self.stop_button.pack(side="right", fill="x", expand=True, padx=(5, 0))
 
         # Start the countdown timer
         self._tick_timer()
@@ -283,6 +296,11 @@ class UIManager:
 
     def _tick_timer(self):
         """Called every second to update the countdown timer."""
+        if self.paused:
+            # Still schedule next check, but don't decrement
+            self.timer_id = self.root.after(1000, self._tick_timer)
+            return
+
         if self.remaining_seconds <= 0:
             # Session complete
             self._on_stop()
@@ -294,6 +312,21 @@ class UIManager:
 
         # Schedule next tick
         self.timer_id = self.root.after(1000, self._tick_timer)
+
+    def _on_pause_toggle(self):
+        """Toggles between paused and running state."""
+        self.paused = not self.paused
+        
+        if self.paused:
+            self.pause_button.config(text="Resume Session", bg="#859900")
+            if hasattr(self, 'status_label') and self.status_label.winfo_exists():
+                self.status_label.config(text="Status: Paused")
+            self.pause_callback()
+        else:
+            self.pause_button.config(text="Pause Session", bg="#b58900")
+            if hasattr(self, 'status_label') and self.status_label.winfo_exists():
+                self.status_label.config(text="Status: Monitoring...")
+            self.resume_callback()
 
     def _on_stop(self):
         """Stops the session and shows the results view."""
@@ -418,8 +451,10 @@ class UIManager:
                 event_type = event.get("type")
                 
                 if event_type == "STATE":
-                    if hasattr(self, 'status_label') and self.status_label.winfo_exists():
-                        self.status_label.config(text=f"Status: {event.get('value')}")
+                    # Only update status if not manually paused (don't let background thread overwrite "Paused")
+                    if not self.paused:
+                        if hasattr(self, 'status_label') and self.status_label.winfo_exists():
+                            self.status_label.config(text=f"Status: {event.get('value')}")
                 elif event_type == "INTERVENTION":
                     self.trigger_intervention(event.get("task"), event.get("reason"))
         except queue.Empty:

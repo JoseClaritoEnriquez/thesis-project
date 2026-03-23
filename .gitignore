@@ -43,7 +43,7 @@ FocusEngine/model_qwen3_llmware
 FocusEngine/model_qwen3_ov_int4
 FocusEngin/model_qwen25_ov_int4
 FocusEngine/model_qwen35_ov_int4
-
+FocusEngine/model_qwen25_ov_int4
 # Model Files
 FocusEngine/model_openvino/
 

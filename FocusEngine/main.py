@@ -149,7 +149,9 @@ def main():
     ui = UIManager(
         start_callback=lambda task: _start_monitoring(task),
         stop_callback=lambda: _stop_monitoring(),
-        reset_callback=lambda: _reset_monitoring()
+        reset_callback=lambda: _reset_monitoring(),
+        pause_callback=lambda: _pause_monitoring(),
+        resume_callback=lambda: _resume_monitoring()
     )
 
     monitor = MonitorLoop(engine, ui.status_queue, ui.event_queue)
@@ -162,6 +164,12 @@ def main():
         
     def _reset_monitoring():
         monitor.reset_counter()
+
+    def _pause_monitoring():
+        monitor.pause()
+
+    def _resume_monitoring():
+        monitor.resume()
 
     # Start the Tkinter main loop for the main UI
     ui.run()
