@@ -44,7 +44,7 @@ class FocusEngine:
     # Pre-exported OpenVINO model directory (relative to bundle_dir)
     MODEL_DIR = "model_qwen25_ov_int4"
 
-    def __init__(self, model_id=None, status_callback=None):
+    def __init__(self, model_id=None, status_callback=None, device="CPU"):
         def _report(msg):
             print(msg)
             if status_callback:
@@ -100,7 +100,7 @@ class FocusEngine:
 
             _report(f"Loading OpenVINO GenAI pipeline...")
             # VLMPipeline handles preprocessing, tokenization, and generation natively
-            self.pipeline = ov_genai.VLMPipeline(self.model_path, "CPU")
+            self.pipeline = ov_genai.VLMPipeline(self.model_path, device)
             _report("Focus Engine Initialized successfully.")
         except Exception as e:
             _report(f"Error: Failed to load or download model: {e}")

@@ -2,8 +2,8 @@ import tkinter as tk
 from tkinter import ttk
 import queue
 import threading
-import sys
 import pystray
+import config_manager
 from PIL import Image, ImageDraw
 
 def create_tray_icon(ui_manager):
@@ -33,8 +33,14 @@ def create_tray_icon(ui_manager):
 
 class SplashScreen:
     """A minimal loading window to show while the heavy ML model is loading."""
-    def __init__(self):
-        self.root = tk.Tk()
+    def __init__(self, parent=None):
+        if parent:
+            self.root = tk.Toplevel(parent)
+            self.is_toplevel = True
+        else:
+            self.root = tk.Tk()
+            self.is_toplevel = False
+            
         self.root.title("Focus Engine")
         self.status_queue = queue.Queue()
         self.after_id = None
@@ -99,6 +105,10 @@ class SplashScreen:
                 self.after_id = self.root.after(100, self._check_status)
         except (tk.TclError, AttributeError):
             pass
+
+    def update_status(self, msg):
+        """Thread-safe status update."""
+        self.status_queue.put(msg)
 
     def close(self):
         """Safely closes the splash screen."""
@@ -194,12 +204,84 @@ class UIManager:
             self.frame, text="Start Focus Session", bg="#2aa198", fg="black", 
             font=("Helvetica", 12, "bold"), command=self._on_start
         )
-        self.start_button.pack(pady=20, fill="x")
+        self.start_button.pack(pady=(20, 10), fill="x")
+
+        # Settings button
+        self.settings_button = tk.Button(
+            self.frame, text="⚙️ Settings", bg=self.bg_color, fg=self.fg_color,
+            font=("Helvetica", 10), command=self._build_settings_view,
+            relief="flat", cursor="hand2"
+        )
+        self.settings_button.pack(pady=5)
 
         self.status_label = tk.Label(
-            self.frame, text="Status: IDLE", bg=self.bg_color, fg="#859900"
+            self.frame, text=f"Status: IDLE ({config_manager.get_device()})", bg=self.bg_color, fg="#859900"
         )
         self.status_label.pack(side="bottom")
+
+    def _build_settings_view(self):
+        """Builds the settings screen for device selection."""
+        self._clear_frame()
+        self.frame = tk.Frame(self.root, bg=self.bg_color, padx=20, pady=20)
+        self.frame.pack(expand=True, fill="both")
+
+        tk.Label(
+            self.frame, text="Settings", font=("Helvetica", 18, "bold"), 
+            bg=self.bg_color, fg="#b58900"
+        ).pack(pady=(0, 20))
+
+        tk.Label(
+            self.frame, text="Inference Device:", bg=self.bg_color, fg=self.fg_color,
+            font=("Helvetica", 10)
+        ).pack(anchor="w")
+
+        # Get available devices
+        try:
+            import openvino as ov
+            core = ov.Core()
+            available_devices = core.available_devices
+        except Exception:
+            available_devices = ["CPU"]
+
+        self.device_var = tk.StringVar(value=config_manager.get_device())
+        self.device_combo = ttk.Combobox(
+            self.frame, textvariable=self.device_var, values=available_devices,
+            state="readonly", font=("Helvetica", 12)
+        )
+        self.device_combo.pack(pady=10, fill="x")
+
+        tk.Label(
+            self.frame, text="Note: Changing device will reload the AI model.",
+            bg=self.bg_color, fg="#cb4b16", font=("Helvetica", 9, "italic"),
+            wraplength=400
+        ).pack(pady=(10, 20))
+
+        # Button row
+        btn_frame = tk.Frame(self.frame, bg=self.bg_color)
+        btn_frame.pack(fill="x", side="bottom")
+
+        tk.Button(
+            btn_frame, text="Cancel", bg="#93a1a1", fg="white",
+            font=("Helvetica", 10, "bold"), command=self._build_setup_view,
+            padx=10
+        ).pack(side="left")
+
+        tk.Button(
+            btn_frame, text="Save & Apply", bg="#2aa198", fg="black",
+            font=("Helvetica", 12, "bold"), command=self._on_save_settings,
+            padx=20
+        ).pack(side="right")
+
+    def _on_save_settings(self):
+        new_device = self.device_var.get()
+        old_device = config_manager.get_device()
+        
+        if new_device != old_device:
+            config_manager.set_device(new_device)
+            # Notify main to reload engine
+            self.settings_changed_callback()
+        else:
+            self._build_setup_view()
 
     def _on_start(self):
         task = self.task_entry.get().strip()

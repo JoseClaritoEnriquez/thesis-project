@@ -5,8 +5,9 @@ from datetime import datetime
 import json
 
 class MonitorLoop:
-    def __init__(self, engine, status_queue, event_queue):
+    def __init__(self, engine, status_queue, event_queue, device="CPU"):
         self.engine = engine
+        self.device = device
         self.status_queue = status_queue
         self.event_queue = event_queue
         self.unaligned_counter = 0
@@ -71,7 +72,7 @@ class MonitorLoop:
             start_time = time.time()
             try:
                 # Post capture request to queue to notify UI (optional, for debug)
-                self.event_queue.put({"type": "STATE", "value": "Capturing & Inferencing"})
+                self.event_queue.put({"type": "STATE", "value": f"Monitoring ({self.device})"})
                 
                 result = self.engine.capture_and_process(self.user_task)
                 
@@ -100,7 +101,7 @@ class MonitorLoop:
                     # We might pause here until the UI resets us, 
                     # but we can rely on the UI calling self.reset_counter()
                 else:
-                    self.event_queue.put({"type": "STATE", "value": "IDLE"})
+                    self.event_queue.put({"type": "STATE", "value": f"IDLE ({self.device})"})
                     self.status_queue.put({
                         "status": status,
                         "counter": self.unaligned_counter,

@@ -1,6 +1,8 @@
 import sys
 import os
 import subprocess
+import tkinter as tk
+import config_manager
 
 def install_dependencies():
     """Automatically install dependencies from requirements.txt if running from source."""
@@ -90,8 +92,9 @@ def main():
 
     def _init_engine_thread():
         try:
+            device = config_manager.get_device()
             # Pass a callback that puts status updates into the splash queue
-            engine = FocusEngine(status_callback=lambda msg: splash.status_queue.put(msg))
+            engine = FocusEngine(status_callback=lambda msg: splash.status_queue.put(msg), device=device)
             result_queue.put(("SUCCESS", engine))
         except Exception as e:
             result_queue.put(("ERROR", e))
@@ -180,4 +183,22 @@ if __name__ == "__main__":
     
     # Optional: ensure we only run main in the original parent process
     # Children created by multiprocessing libraries should be caught by freeze_support()
-    main()
+    try:
+        main()
+    except Exception as e:
+        import traceback
+        error_msg = f"CRITICAL CRASH:\n{str(e)}\n\n{traceback.format_exc()}"
+        print(error_msg)
+        
+        # Try to write to life-saving crash log
+        try:
+            with open("crash_report.txt", "w") as f:
+                f.write(error_msg)
+            print("Crash report written to crash_report.txt")
+        except:
+            pass
+        
+        # Keep console open if not frozen to allow user to see error
+        if not getattr(sys, 'frozen', False):
+            print("\nPress Enter to exit...")
+            input()
