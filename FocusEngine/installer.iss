@@ -14,17 +14,23 @@ PrivilegesRequired=admin
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
+Name: "startup"; Description: "Launch Focus Engine on Windows Startup"; GroupDescription: "Additional options:"; Flags: unchecked
 
 [Files]
-; Grab everything from the PyInstaller Dist Folder
 Source: "dist\FocusEngine\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-; Add a note to help users find the VC++ Redistributable if the app fails to start
 Source: "README_INSTALL.txt"; DestDir: "{app}"; Flags: isreadme
 
 [Icons]
 Name: "{group}\Focus Engine"; Filename: "{app}\FocusEngine.exe"
 Name: "{commondesktop}\Focus Engine"; Filename: "{app}\FocusEngine.exe"; Tasks: desktopicon
 Name: "{group}\{cm:UninstallProgram,Focus Engine}"; Filename: "{uninstallexe}"
+
+[Registry]
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "FocusEngine"; ValueData: """{app}\FocusEngine.exe"""; Flags: uninsdeletevalue; Tasks: startup
+
+[UninstallDelete]
+; Clean up configuration and logs in %LOCALAPPDATA%
+Type: filesandordirs; Name: "{localappdata}\FocusEngine"
 
 [Run]
 Filename: "{app}\FocusEngine.exe"; Description: "{cm:LaunchProgram,Focus Engine}"; Flags: nowait postinstall skipifsilent

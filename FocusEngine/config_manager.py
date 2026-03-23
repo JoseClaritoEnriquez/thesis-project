@@ -26,7 +26,7 @@ def load_config():
             print(f"Error loading config: {e}")
     
     # Default config
-    return {"device": "CPU"}
+    return {"device": "CPU", "model_path": None}
 
 def save_config(config):
     path = get_config_path()
@@ -42,4 +42,12 @@ def get_device():
 def set_device(device):
     config = load_config()
     config["device"] = device
+    save_config(config)
+
+def get_model_path():
+    return load_config().get("model_path")
+
+def set_model_path(path):
+    config = load_config()
+    config["model_path"] = path
     save_config(config)

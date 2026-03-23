@@ -8,6 +8,20 @@ from PIL import Image
 from huggingface_hub import snapshot_download, hf_hub_download
 
 import threading
+import config_manager
+
+# --- Professional DLL Discovery ---
+# This fixes "cannot find entry to extension library" by ensuring 
+# OpenVINO DLLs are accessible even when bundled.
+if getattr(sys, 'frozen', False):
+    # In bundled app, OpenVINO libs are in _internal/openvino/libs
+    ov_libs = os.path.join(sys._MEIPASS, "_internal", "openvino", "libs")
+    if os.path.exists(ov_libs):
+        try:
+            os.add_dll_directory(ov_libs)
+        except Exception as e:
+            print(f"DLL Discovery Warning: {e}")
+# ------------------------------------
 
 # Custom Progress Reporter to pipe Hugging Face status to the UI
 # Minimal tqdm-compatible interface required by snapshot_download
@@ -41,10 +55,7 @@ class ProgressReporter:
 
 # Focus Engine Class (Torch-Free / OpenVINO Native)
 class FocusEngine:
-    # Pre-exported OpenVINO model directory (relative to bundle_dir)
-    MODEL_DIR = "model_qwen25_ov_int4"
-
-    def __init__(self, model_id=None, status_callback=None, device="CPU"):
+    def __init__(self, model_path=None, status_callback=None, device=None):
         def _report(msg):
             print(msg)
             if status_callback:
@@ -53,12 +64,11 @@ class FocusEngine:
         _report(f"Initializing FocusEngine (OpenVINO GenAI)...")
         
         # Determine the absolute path to the model directory
-        if getattr(sys, 'frozen', False):
-            # In packaged app, model is in _internal/model_openvino
-            self.model_path = os.path.join(sys._MEIPASS, "_internal", self.MODEL_DIR)
-        else:
-            # In dev, use the current folder or a specified path
-            self.model_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), self.MODEL_DIR)
+        self.model_path = model_path or config_manager.get_model_path()
+        device = device or config_manager.get_device()
+
+        if not self.model_path:
+            raise RuntimeError("Model path not configured.")
 
         try:
             # Check if model exists AND weights are present, if not download it
@@ -98,7 +108,7 @@ class FocusEngine:
                 )
                 _report("Download complete.")
 
-            _report(f"Loading OpenVINO GenAI pipeline...")
+            _report(f"Loading OpenVINO GenAI pipeline on {device}...")
             # VLMPipeline handles preprocessing, tokenization, and generation natively
             self.pipeline = ov_genai.VLMPipeline(self.model_path, device)
             _report("Focus Engine Initialized successfully.")

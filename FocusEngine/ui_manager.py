@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, filedialog
 import queue
 import threading
 import pystray
@@ -130,6 +130,15 @@ class SplashScreen:
             pass
 
 class UIManager:
+    @staticmethod
+    def prompt_for_model_dir():
+        """Shows a folder selection dialog for the model directory."""
+        root = tk.Tk()
+        root.withdraw()
+        path = filedialog.askdirectory(title="Select Folder to Store AI Model (1.5GB)")
+        root.destroy()
+        return path
+
     def __init__(self, start_callback, stop_callback, reset_callback):
         self.start_callback = start_callback
         self.stop_callback = stop_callback

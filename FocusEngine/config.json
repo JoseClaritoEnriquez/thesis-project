@@ -1,3 +1,4 @@
 {
-    "device": "GPU"
+    "device": "GPU",
+    "model_path": "E:\\Models\\FocusEngineModel"
 }

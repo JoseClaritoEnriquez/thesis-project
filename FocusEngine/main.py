@@ -79,6 +79,20 @@ def main():
     import threading
     import queue
     
+    # First Run / Model Path Check
+    model_path = config_manager.get_model_path()
+    if not model_path:
+        print("Model path not configured. Prompting user...")
+        # Local import inside main to avoid circular dependencies or early UI init
+        from ui_manager import UIManager
+        model_path = UIManager.prompt_for_model_dir()
+        if model_path:
+            config_manager.set_model_path(model_path)
+            print(f"Model path saved: {model_path}")
+        else:
+            print("Model selection cancelled. Exiting.")
+            return
+
     # Initialize splash screen immediately
     splash = SplashScreen()
     
@@ -93,8 +107,12 @@ def main():
     def _init_engine_thread():
         try:
             device = config_manager.get_device()
-            # Pass a callback that puts status updates into the splash queue
-            engine = FocusEngine(status_callback=lambda msg: splash.status_queue.put(msg), device=device)
+            # Pass configured model_path to FocusEngine
+            engine = FocusEngine(
+                model_path=model_path,
+                status_callback=lambda msg: splash.status_queue.put(msg), 
+                device=device
+            )
             result_queue.put(("SUCCESS", engine))
         except Exception as e:
             result_queue.put(("ERROR", e))
