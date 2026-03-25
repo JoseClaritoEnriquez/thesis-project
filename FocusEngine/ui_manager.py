@@ -288,17 +288,11 @@ class UIManager:
         ).pack(pady=(0, 20))
 
         tk.Label(
-            self.frame, text="Inference Device:", bg=self.bg_color, fg=self.fg_color,
+            self.frame, text="Inference Runtime:", bg=self.bg_color, fg=self.fg_color,
             font=("Helvetica", 10)
         ).pack(anchor="w")
 
-        # Get available devices
-        try:
-            import openvino as ov
-            core = ov.Core()
-            available_devices = core.available_devices
-        except Exception:
-            available_devices = ["CPU"]
+        available_devices = ["AUTO", "CUDA", "VULKAN", "CPU"]
 
         self.device_var = tk.StringVar(value=config_manager.get_device())
         self.device_combo = ttk.Combobox(
@@ -308,7 +302,7 @@ class UIManager:
         self.device_combo.pack(pady=10, fill="x")
 
         tk.Label(
-            self.frame, text="Note: Changing device will reload the AI model.",
+            self.frame, text="Note: Changing runtime will reload the AI model.",
             bg=self.bg_color, fg="#cb4b16", font=("Helvetica", 9, "italic"),
             wraplength=400
         ).pack(pady=(10, 20))
@@ -546,8 +540,7 @@ class UIManager:
         except:
             pass
         
-        # Hard exit to ensure no background threads or child processes 
-        # (like OpenVINO or Hugging Face) keep the process alive on Windows.
+        # Hard exit to ensure no background worker processes keep the app alive on Windows.
         os._exit(0)
 
     def trigger_intervention(self, task, reasoning):

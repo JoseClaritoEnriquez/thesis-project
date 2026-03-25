@@ -57,3 +57,6 @@ Thumbs.db
 # verify_*.py
 /Qwen2.5-VL-3B-Instruct
 /venv_cuda
+.cursor/rules/actions-summary-log.mdc
+/FocusEngine/.venv311
+FocusEngine/actions summary.md

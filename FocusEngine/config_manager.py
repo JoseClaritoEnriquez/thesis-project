@@ -27,9 +27,10 @@ def load_config():
     
     # Default config
     return {
-        "device": "CPU", 
+        "device": "AUTO",
+        "runtime": "auto",
         "model_path": None,
-        "backend": "auto" # "auto", "openvino", or "llama-cpp" (replaces transformers)
+        "backend": "llama-cpp",
     }
 
 def save_config(config):
@@ -41,12 +42,45 @@ def save_config(config):
         print(f"Error saving config: {e}")
 
 def get_device():
-    return load_config().get("device", "CPU")
+    config = load_config()
+    runtime = str(config.get("runtime", "")).strip().lower()
+    if runtime == "cuda":
+        return "CUDA"
+    if runtime == "vulkan":
+        return "VULKAN"
+    if runtime == "cpu":
+        return "CPU"
+
+    legacy = str(config.get("device", "AUTO")).strip().upper()
+    if legacy in {"CUDA", "VULKAN", "CPU", "AUTO"}:
+        return legacy
+    if legacy in {"NVIDIA", "GPU"}:
+        return "AUTO"
+    if legacy == "AMD":
+        return "VULKAN"
+    return "AUTO"
 
 def set_device(device):
     config = load_config()
-    config["device"] = device
+    normalized = str(device or "AUTO").strip().upper()
+    if normalized in {"NVIDIA", "GPU"}:
+        normalized = "AUTO"
+    if normalized == "AMD":
+        normalized = "VULKAN"
+    if normalized not in {"AUTO", "CUDA", "VULKAN", "CPU"}:
+        normalized = "AUTO"
+
+    config["device"] = normalized
+    config["runtime"] = normalized.lower()
     save_config(config)
+
+
+def get_runtime():
+    return get_device().lower()
+
+
+def set_runtime(runtime):
+    set_device(runtime)
 
 def get_model_path():
     path = load_config().get("model_path")
@@ -61,9 +95,11 @@ def set_model_path(path):
     save_config(config)
 
 def get_backend():
-    return load_config().get("backend", "auto")
+    # Backward-compatible getter. Backend is fixed to llama-cpp.
+    return "llama-cpp"
 
 def set_backend(backend):
     config = load_config()
-    config["backend"] = backend
+    # Keep key for backward compatibility, but enforce llama-cpp-only architecture.
+    config["backend"] = "llama-cpp"
     save_config(config)

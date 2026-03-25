@@ -11,7 +11,7 @@ os.makedirs(target_dir, exist_ok=True)
 
 # We download specific files for efficiency
 files_to_download = [
-    "qwen3.5-2b-instruct-q4_k_m.gguf",
+    "Qwen3.5-2B-Q4_K_M.gguf",
     "mmproj-F16.gguf"
 ]
 

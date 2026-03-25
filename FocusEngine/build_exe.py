@@ -6,7 +6,7 @@ import shutil
 def build():
     """
     Automates the PyInstaller build process for Focus Engine.
-    Ensures that OpenVINO and its dependencies are correctly bundled.
+    Builds the llama.cpp-based desktop executable bundle.
     """
     # 1. Base paths
     script_dir = os.path.dirname(os.path.abspath(__file__))
@@ -15,6 +15,10 @@ def build():
     build_dir = os.path.join(script_dir, "build")
 
     print("--- Focus Engine: Automated Build Pipeline ---")
+    if sys.version_info[:2] != (3, 11):
+        print("Warning: This project is tested with Python 3.11.")
+        print(f"Current interpreter: {sys.executable}")
+        print("Recommended: .\\.venv311\\Scripts\\python.exe build_exe.py")
     
     # 2. Cleanup previous builds
     if os.path.exists(dist_dir):
@@ -32,7 +36,7 @@ def build():
     # 4. Run PyInstaller
     print(f"Running PyInstaller for {spec_file}...")
     try:
-        # We use the spec file because it contains the complex collect_all hooks for OpenVINO
+        # We use the spec file to keep hidden imports and assets consistent.
         subprocess.check_call([
             sys.executable, "-m", "PyInstaller", 
             spec_file, 

@@ -1,5 +1,6 @@
 {
-    "device": "GPU",
-    "model_path": "C:/Users/user/Documents/jace",
-    "backend": "auto"
+    "device": "CPU",
+    "runtime": "cpu",
+    "model_path": "C:/Users/Core i5/Documents/documents",
+    "backend": "llama-cpp"
 }

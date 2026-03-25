@@ -8,12 +8,35 @@ def install_dependencies():
     """Automatically install dependencies from requirements.txt if running from source."""
     if getattr(sys, 'frozen', False):
         return # Never run pip in a packaged executable
-        
-    req_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "requirements.txt")
-    if os.path.exists(req_file):
-        print("Checking/Installing dependencies from requirements.txt...")
+
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    installer = os.path.join(script_dir, "install_runtime.py")
+    profile = os.environ.get("FOCUS_ENGINE_RUNTIME_PROFILE", "jamepeng").strip().lower()
+    if profile in {"jamespeng", "jamespeng-cpu"}:
+        profile = "jamepeng"
+    if profile == "jamespeng-nvidia":
+        profile = "jamepeng-nvidia"
+    if profile == "jamespeng-amd":
+        profile = "jamepeng-amd"
+    if profile not in {
+        "cpu",
+        "nvidia",
+        "amd",
+        "jamepeng",
+        "jamepeng-cpu",
+        "jamepeng-nvidia",
+        "jamepeng-amd",
+        "jamespeng",
+        "jamespeng-cpu",
+        "jamespeng-nvidia",
+        "jamespeng-amd",
+    }:
+        profile = "jamepeng"
+
+    if os.path.exists(installer):
+        print(f"Checking/Installing dependencies (profile={profile})...")
         try:
-            subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", req_file])
+            subprocess.check_call([sys.executable, installer, "--profile", profile])
         except Exception as e:
             print(f"Auto-install failed: {e}")
 
@@ -21,7 +44,7 @@ def install_dependencies():
 if not getattr(sys, 'frozen', False):
     try:
         import dotenv
-        import openvino_genai
+        import llama_cpp
         import huggingface_hub
         import PIL
         import numpy
