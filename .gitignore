@@ -53,6 +53,61 @@ Thumbs.db
 
 # Research/Temporary scripts (uncomment to ignore)
 # check_*.py
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+*.so
+.Python
+env/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+.venv/
+venv/
+ENV/
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+FocusEngine/.env
+
+# Installer and Build
+InstallerOutput/
+FocusEngine.spec
+FocusEngine/build/
+FocusEngine/dist/
+
+# Model Files
+FocusEngine/model_*/
+FocusEngine/model/
+
+# Logs
+*.log
+kernel.errors.txt
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Research/Temporary scripts (uncomment to ignore)
+# check_*.py
 # search_*.py
 # verify_*.py
 /Qwen2.5-VL-3B-Instruct
@@ -61,3 +116,6 @@ Thumbs.db
 /FocusEngine/.venv311
 FocusEngine/actions summary.md
 FocusEngine/one_pass_match_check_workflow.md
+/.venv311
+FocusEngine/config.json
+FocusEngine/config.json

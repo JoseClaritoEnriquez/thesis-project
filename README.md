@@ -20,7 +20,8 @@ Install project dependencies from `FocusEngine/requirements.txt`:
 - `python-dotenv`
 
 `llama-cpp-python` is installed via runtime profile using `FocusEngine/install_runtime.py`.
-- `jamepeng` or `jamepeng-cpu` (**default**): source install from [`JamePeng/llama-cpp-python`](https://github.com/JamePeng/llama-cpp-python).
+- `jamepeng-cu126` (**default**): prebuilt CUDA 12.6 wheel for NVIDIA GPUs.
+- `jamepeng` or `jamepeng-cpu`: source install from [`JamePeng/llama-cpp-python`](https://github.com/JamePeng/llama-cpp-python).
 - `jamepeng-nvidia`: source install from fork with `CMAKE_ARGS=-DGGML_CUDA=on`.
 - `jamepeng-amd`: source install from fork with `CMAKE_ARGS=-DGGML_VULKAN=on`.
 - `cpu`: prebuilt wheel (`llama-cpp-python==0.3.2`) for maximum compatibility/fallback.
@@ -68,8 +69,8 @@ Using the fork profiles enables newer upstream features (including newer chat ha
   - `mmproj-F16.gguf`
 - Runtime/download defaults are centralized in `FocusEngine/focus_engine.py` and mirrored in `FocusEngine/download_model.py`.
 
-Default recommendation is `cpu` profile for widest compatibility, with app-level GPU fallback already handled at runtime.
-If startup auto-installs dependencies, override profile using `FOCUS_ENGINE_RUNTIME_PROFILE` (for example: `jamepeng`, `jamepeng-nvidia`, `jamepeng-amd`, `cpu`).
+Default recommendation is `jamepeng-cu126` for NVIDIA users and `cpu` for others.
+If startup auto-installs dependencies, override profile using `FOCUS_ENGINE_RUNTIME_PROFILE` (for example: `jamepeng-cu126`, `cpu`, `jamepeng-nvidia`).
 
 ### Run packaged app (.exe)
 1. Install Microsoft Visual C++ Redistributable (x64) if not already installed.

@@ -5,6 +5,50 @@ import threading
 import inspect
 import importlib
 import ctypes
+import sys
+
+def _ensure_win32_cuda_dlls():
+    """
+    On Windows, ensures that CUDA runtime DLLs are in the search path.
+    This is required for llama-cpp-python CUDA wheels to load correctly.
+    """
+    if sys.platform != "win32":
+        return
+
+    search_paths = set()
+    
+    # 1. Check CUDA_PATH environment variable
+    cuda_path = os.environ.get("CUDA_PATH")
+    if cuda_path:
+        bin_path = os.path.join(cuda_path, "bin")
+        if os.path.isdir(bin_path):
+            search_paths.add(bin_path)
+
+    # 2. Check standard installation directory
+    base_cuda_dir = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
+    if os.path.exists(base_cuda_dir):
+        try:
+            for version_dir in os.listdir(base_cuda_dir):
+                bin_path = os.path.join(base_cuda_dir, version_dir, "bin")
+                if os.path.isdir(bin_path):
+                    search_paths.add(bin_path)
+        except Exception:
+            pass
+
+    # 3. Add found paths to DLL search path
+    for path in search_paths:
+        try:
+            # Prepend to PATH for libraries that don't use add_dll_directory
+            os.environ["PATH"] = path + os.pathsep + os.environ["PATH"]
+            # Use add_dll_directory for Python 3.8+ compatibility
+            if hasattr(os, "add_dll_directory"):
+                os.add_dll_directory(path)
+        except Exception as e:
+            print(f"Failed to add DLL directory {path}: {e}")
+            pass
+
+# Ensure DLLs are available before any import of llama_cpp
+_ensure_win32_cuda_dlls()
 
 import pyautogui
 from PIL import Image
@@ -12,9 +56,9 @@ from huggingface_hub import hf_hub_download
 
 import config_manager
 
-# Qwen-VL allocates a large image token block (often >=1024 tokens). n_ctx=2048 cannot
-# fit image + prompt + generation and triggers decode failures and poisoned handler state.
-LLAMA_VL_N_CTX = 8192
+# Qwen-VL allocates a large image token block (often >=1024 tokens). n_ctx=2048 can be tight,
+# but 8192 consumes significant RAM on CPU. 4096 is a healthy middle ground.
+LLAMA_VL_N_CTX = 4096
 MODEL_SPEC = {
     "display_name": "Qwen2.5-VL-3B",
     "repo_id": "unsloth/Qwen2.5-VL-3B-Instruct-GGUF",
@@ -266,6 +310,15 @@ class LlamaCppBackend(FocusEngineBackend):
         self.runtime = runtime
         self.report = report_callback
 
+        import psutil
+
+        if runtime == "cpu":
+            # Prevent the CUDA-enabled library from chatter/looping with the driver 
+            # while running on CPU. This MUST be set before llama_cpp is imported.
+            os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
+            # Prevent OpenMP from fighting with llama-cpp's internal threading
+            os.environ["OMP_NUM_THREADS"] = "1"
+
         from llama_cpp import Llama
 
         _silence_llama_cpp_logs()
@@ -285,11 +338,12 @@ class LlamaCppBackend(FocusEngineBackend):
         self._chat_handler = chat_handler
         self._chat_handler_name = handler_name
         self._active_n_gpu_layers = n_gpu_layers
+        self._n_threads = psutil.cpu_count(logical=False) or 4
         self._llama_cpp_version = getattr(importlib.import_module("llama_cpp"), "__version__", "unknown")
 
         self.report(
             f"Loading llama.cpp backend (runtime={runtime}, n_gpu_layers={n_gpu_layers}, "
-            f"chat_handler={handler_name})..."
+            f"n_threads={self._n_threads}, chat_handler={handler_name})..."
         )
         try:
             self.llm = self._build_llm(n_gpu_layers)
@@ -311,14 +365,17 @@ class LlamaCppBackend(FocusEngineBackend):
         from llama_cpp import Llama
 
         self._active_n_gpu_layers = n_gpu_layers
-        with _suppress_llama_native_io():
-            return Llama(
-                model_path=self._llm_path,
-                chat_handler=self._chat_handler,
-                n_gpu_layers=n_gpu_layers,
-                n_ctx=LLAMA_VL_N_CTX,
-                verbose=False,
-            )
+        # Temporarily disabled for debugging
+        # with _suppress_llama_native_io():
+        return Llama(
+            model_path=self._llm_path,
+            chat_handler=self._chat_handler,
+            n_gpu_layers=n_gpu_layers,
+            n_ctx=LLAMA_VL_N_CTX,
+            n_threads=getattr(self, "_n_threads", None),
+            n_threads_batch=getattr(self, "_n_threads", None),
+            verbose=False,
+        )
 
     def _inference_error_is_retryable(self, exc):
         return self._is_recoverable_decode_error(exc) or self._is_template_render_error(

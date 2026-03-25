@@ -1,10 +1,10 @@
 ; Focus Engine Installer Script
 [Setup]
 AppName=Focus Engine
-AppVersion=1.0
+AppVersion=1.1 (CUDA Standalone)
 DefaultDirName={autopf}\FocusEngine
 DefaultGroupName=Focus Engine
-OutputDir=.\InstallerOutput
+OutputDir=.\InstallerOutput 
 OutputBaseFilename=FocusEngine_Setup
 Compression=lzma2/ultra64
 SolidCompression=yes
@@ -17,8 +17,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "startup"; Description: "Launch Focus Engine on Windows Startup"; GroupDescription: "Additional options:"; Flags: unchecked
 
 [Files]
-Source: "{#SourcePath}\..\dist\FocusEngine\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
-Source: "{#SourcePath}\README_INSTALL.txt"; DestDir: "{app}"; Flags: isreadme
+Source: "dist\FocusEngine\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "README_INSTALL.txt"; DestDir: "{app}"; Flags: isreadme
 
 [Icons]
 Name: "{group}\Focus Engine"; Filename: "{app}\FocusEngine.exe"

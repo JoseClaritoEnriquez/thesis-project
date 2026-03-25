@@ -8,6 +8,7 @@ import sys
 CPU_WHEEL_INDEX = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
 LLAMA_CPP_VERSION = "0.3.2"
 LLAMA_CPP_FORK_SPEC = "llama-cpp-python @ git+https://github.com/JamePeng/llama-cpp-python.git"
+JAMEPENG_CU126_WHEEL = "https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.33-cu126-Basic-win-20260315/llama_cpp_python-0.3.33+cu126.basic-cp311-cp311-win_amd64.whl"
 
 # MinGW w64devkit: set W64DEVKIT to the kit root (folder that contains `bin/gcc.exe`).
 # If unset, we use %USERPROFILE%\Downloads\w64devkit when that directory exists.
@@ -132,10 +133,25 @@ def install_llama(profile):
     profile = str(profile).strip().lower()
     if profile in {"jamespeng", "jamespeng-cpu"}:
         profile = "jamepeng"
-    if profile == "jamespeng-nvidia":
+    if profile in {"jamespeng-nvidia", "jamepeng-nvidia"}:
         profile = "jamepeng-nvidia"
-    if profile == "jamespeng-amd":
+    if profile in {"jamespeng-amd", "jamepeng-amd"}:
         profile = "jamepeng-amd"
+
+    if profile == "jamepeng-cu126":
+        _run(
+            [
+                sys.executable,
+                "-m",
+                "pip",
+                "install",
+                "--upgrade",
+                "--force-reinstall",
+                "--no-cache-dir",
+                JAMEPENG_CU126_WHEEL,
+            ]
+        )
+        return
 
     if profile == "cpu":
         _run(
@@ -233,12 +249,13 @@ def main():
             "jamepeng-cpu",
             "jamepeng-nvidia",
             "jamepeng-amd",
+            "jamepeng-cu126",
             "jamespeng",
             "jamespeng-cpu",
             "jamespeng-nvidia",
             "jamespeng-amd",
         ],
-        default="jamepeng",
+        default="jamepeng-cu126",
         help="Runtime backend profile for llama-cpp-python.",
     )
     args = parser.parse_args()

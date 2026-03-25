@@ -6,6 +6,45 @@ import queue
 from datetime import datetime
 import config_manager
 
+def _ensure_win32_cuda_dlls():
+    """
+    On Windows, ensures that CUDA runtime DLLs are in the search path.
+    This is required for llama-cpp-python CUDA wheels to load correctly.
+    """
+    if sys.platform != "win32":
+        return
+
+    search_paths = set()
+    
+    # 1. Check CUDA_PATH environment variable
+    cuda_path = os.environ.get("CUDA_PATH")
+    if cuda_path:
+        bin_path = os.path.join(cuda_path, "bin")
+        if os.path.isdir(bin_path):
+            search_paths.add(bin_path)
+
+    # 2. Check standard installation directory
+    base_cuda_dir = r"C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA"
+    if os.path.exists(base_cuda_dir):
+        try:
+            for version_dir in os.listdir(base_cuda_dir):
+                bin_path = os.path.join(base_cuda_dir, version_dir, "bin")
+                if os.path.isdir(bin_path):
+                    search_paths.add(bin_path)
+        except Exception:
+            pass
+
+    # 3. Add found paths to DLL search path
+    for path in search_paths:
+        try:
+            # Prepend to PATH for libraries that don't use add_dll_directory
+            os.environ["PATH"] = path + os.pathsep + os.environ["PATH"]
+            # Use add_dll_directory for Python 3.8+ compatibility
+            if hasattr(os, "add_dll_directory"):
+                os.add_dll_directory(path)
+        except Exception:
+            pass
+
 def install_dependencies():
     """Automatically install dependencies from requirements.txt if running from source."""
     if getattr(sys, 'frozen', False):
@@ -13,7 +52,7 @@ def install_dependencies():
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     installer = os.path.join(script_dir, "install_runtime.py")
-    profile = os.environ.get("FOCUS_ENGINE_RUNTIME_PROFILE", "jamepeng").strip().lower()
+    profile = os.environ.get("FOCUS_ENGINE_RUNTIME_PROFILE", "jamepeng-cu126").strip().lower()
     if profile in {"jamespeng", "jamespeng-cpu"}:
         profile = "jamepeng"
     if profile == "jamespeng-nvidia":
@@ -44,13 +83,14 @@ def install_dependencies():
 
 # Run dependency check only if not frozen
 if not getattr(sys, 'frozen', False):
+    _ensure_win32_cuda_dlls()
     try:
         import dotenv
         import llama_cpp
         import huggingface_hub
         import PIL
         import numpy
-    except ImportError:
+    except (ImportError, RuntimeError):
         install_dependencies()
 
 from dotenv import load_dotenv, find_dotenv

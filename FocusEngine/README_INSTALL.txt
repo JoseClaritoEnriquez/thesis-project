@@ -20,11 +20,12 @@ Python packages (from requirements.txt):
 - python-dotenv
 
 llama-cpp-python install profile:
-- jamepeng / jamepeng-cpu (recommended default, source install from JamePeng fork)
+- jamepeng / jamepeng-cpu (source install from JamePeng fork)
 - nvidia (CUDA build)
 - amd (Vulkan build)
 - jamepeng-nvidia (fork + CUDA CMake args)
 - jamepeng-amd (fork + Vulkan CMake args)
+- jamepeng-cu126 (default, prebuilt wheel for CUDA 12.6, v0.3.33)
 - cpu (prebuilt wheel fallback)
 
 Compatibility note:
