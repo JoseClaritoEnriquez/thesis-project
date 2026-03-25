@@ -436,9 +436,12 @@ class LlamaCppBackend(FocusEngineBackend):
                 raise
 
 class FocusEngine:
-    def __init__(self, model_path=None, status_callback=None, device=None, backend=None):
+    def __init__(self, model_path=None, status_callback=None, device=None, backend=None, trace_callback=None):
+        self.trace_callback = trace_callback
+
         def _report(msg):
             print(msg)
+            self._emit_trace("INFO", "ENGINE", msg)
             if status_callback:
                 status_callback(msg)
 
@@ -490,7 +493,12 @@ class FocusEngine:
             _report("Focus Engine Initialized successfully.")
         except Exception as e:
             _report(f"Error: Failed to load or download model: {e}")
+            self._emit_trace("ERROR", "ENGINE", f"Failed to initialize model backend: {e}")
             raise RuntimeError(f"Failed to initialize Focus Engine: {e}") from e
+
+    def _emit_trace(self, level, source, message):
+        if self.trace_callback:
+            self.trace_callback(message, level=level, source=source)
 
     def capture_and_process(self, user_task):
         """
@@ -527,6 +535,7 @@ class FocusEngine:
                 "3. Do not include thinking tags or extra sections."
             )
             print(f"One Pass Input Prompt:\n{verdict_prompt}")
+            self._emit_trace("LLM_INPUT", "ENGINE", verdict_prompt)
             raw_verdict = self.run_inference(
                 verdict_prompt,
                 image=screenshot,
@@ -537,6 +546,7 @@ class FocusEngine:
             raw_verdict = _sanitize_model_text(raw_verdict)
             raw_verdict_str = raw_verdict if isinstance(raw_verdict, str) else str(raw_verdict)
             print(f"Raw Verdict: {raw_verdict_str!r} (len={len(raw_verdict_str)})")
+            self._emit_trace("LLM_OUTPUT", "ENGINE", raw_verdict_str)
 
             # 3. Clean up RAM
             import gc
@@ -546,6 +556,7 @@ class FocusEngine:
             return self._parse_response(raw_verdict, user_task)
         except Exception as e:
             print(f"Error in one-pass processing: {e}")
+            self._emit_trace("ERROR", "ENGINE", f"Error in one-pass processing: {e}")
             return {"status": "ERROR", "reasoning": str(e)}
 
     def run_inference(self, prompt_text, image=None, options=None):
@@ -564,6 +575,7 @@ class FocusEngine:
             return self.backend.generate(prompt_text, image, options=options)
         except Exception as e:
             print(f"Inference error: {e}")
+            self._emit_trace("ERROR", "ENGINE", f"Inference error: {e}")
             return {"status": "ERROR", "reasoning": str(e)}
 
     def _parse_response(self, raw_output, user_task=None):

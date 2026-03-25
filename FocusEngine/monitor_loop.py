@@ -5,11 +5,12 @@ from datetime import datetime
 import json
 
 class MonitorLoop:
-    def __init__(self, engine, status_queue, event_queue, device="CPU"):
+    def __init__(self, engine, status_queue, event_queue, device="CPU", log_callback=None):
         self.engine = engine
         self.device = device
         self.status_queue = status_queue
         self.event_queue = event_queue
+        self.log_callback = log_callback
         self.unaligned_counter = 0
         self.total_distractions = 0
         self.running = False
@@ -17,6 +18,10 @@ class MonitorLoop:
         self.user_task = ""
         self.thread = None
         self.interval = 10 # 10s interval for i7-12700 spec
+
+    def _emit_log(self, message, level="INFO", source="MONITOR"):
+        if self.log_callback:
+            self.log_callback(message, level=level, source=source)
 
     def start(self, user_task):
         """Starts the background monitoring loop in a new thread."""
@@ -33,6 +38,7 @@ class MonitorLoop:
 
         self.thread = threading.Thread(target=self._run_loop, daemon=True)
         self.thread.start()
+        self._emit_log(f"Monitoring started for task: {user_task}")
 
     def stop(self):
         """Signals the background thread to stop and waits for it to finish."""
@@ -42,10 +48,13 @@ class MonitorLoop:
             self.thread.join(timeout=15)  # Wait long enough for any in-flight inference
             if self.thread.is_alive():
                 print("Warning: monitor thread did not stop within timeout.")
+                self._emit_log("Warning: monitor thread did not stop within timeout.", level="ERROR")
+        self._emit_log("Monitoring stopped.")
 
     def reset_counter(self):
         self.unaligned_counter = 0
         print("Unaligned counter manually reset by UI.")
+        self._emit_log("Unaligned counter manually reset by UI.")
 
     def _log_status(self, status, latency_ms):
         """Writes to a local audit log (JSON schema)."""
@@ -86,6 +95,7 @@ class MonitorLoop:
                 
                 if status == "ERROR":
                     print(f"Critical error in inference: {reasoning}")
+                    self._emit_log(f"Critical error in inference: {reasoning}", level="ERROR")
                     self.running = False
                     self.event_queue.put({"type": "ERROR", "value": f"Monitoring Failed: {reasoning}"})
                     break
@@ -99,9 +109,13 @@ class MonitorLoop:
                         f"[UNALIGNED] Count: {self.unaligned_counter} (Total: {self.total_distractions}). "
                         f"Observed: {observed_activity} | Reason: {reasoning}"
                     )
+                    self._emit_log(
+                        f"UNALIGNED #{self.unaligned_counter} (total={self.total_distractions}) | {observed_activity} | {reasoning}"
+                    )
                 else:
                     self.unaligned_counter = 0
                     print(f"[ALIGNED] Resetting counter. Observed: {observed_activity} | Reason: {reasoning}")
+                    self._emit_log(f"ALIGNED | {observed_activity} | {reasoning}")
 
                 # Always update the status queue for metrics
                 self.status_queue.put({
@@ -117,6 +131,10 @@ class MonitorLoop:
                         f"Intervention triggered! Counter at {self.unaligned_counter}. "
                         f"Observed: {observed_activity} | Reason: {reasoning}"
                     )
+                    self._emit_log(
+                        f"Intervention triggered at {self.unaligned_counter}. Observed: {observed_activity} | Reason: {reasoning}",
+                        level="ERROR",
+                    )
                     self.event_queue.put({
                         "type": "INTERVENTION", 
                         "task": self.user_task,
@@ -128,6 +146,7 @@ class MonitorLoop:
 
             except Exception as e:
                 print(f"Error in monitor loop: {e}")
+                self._emit_log(f"Error in monitor loop: {e}", level="ERROR")
                 self.event_queue.put({"type": "ERROR", "value": str(e)})
 
         print("Monitoring loop stopped.")

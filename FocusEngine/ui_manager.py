@@ -1,6 +1,7 @@
 import os
 import tkinter as tk
 from tkinter import ttk, filedialog
+from tkinter.scrolledtext import ScrolledText
 import queue
 import threading
 import pystray
@@ -178,7 +179,7 @@ class UIManager:
         root.destroy()
         return path
 
-    def __init__(self, start_callback, stop_callback, reset_callback, settings_changed_callback):
+    def __init__(self, start_callback, stop_callback, reset_callback, settings_changed_callback, log_queue=None):
         self.start_callback = start_callback
         self.stop_callback = stop_callback
         self.reset_callback = reset_callback
@@ -187,6 +188,11 @@ class UIManager:
         
         self.status_queue = queue.Queue()
         self.event_queue = queue.Queue()
+        self.log_queue = log_queue if log_queue is not None else queue.Queue()
+        self.log_history = []
+        self.max_log_history = 1000
+        self.output_window: tk.Toplevel = None  # type: ignore
+        self.output_text: ScrolledText = None  # type: ignore
         
         self.root = tk.Tk()
         self.root.title("Focus Engine (High Performance)")
@@ -307,6 +313,15 @@ class UIManager:
             wraplength=400
         ).pack(pady=(10, 20))
 
+        tk.Button(
+            self.frame,
+            text="View Output Terminal",
+            bg="#268bd2",
+            fg="white",
+            font=("Helvetica", 10, "bold"),
+            command=self.open_output_terminal,
+        ).pack(fill="x", pady=(0, 15))
+
         # Button row
         btn_frame = tk.Frame(self.frame, bg=self.bg_color)
         btn_frame.pack(fill="x", side="bottom")
@@ -322,6 +337,69 @@ class UIManager:
             font=("Helvetica", 12, "bold"), command=self._on_save_settings,
             padx=20
         ).pack(side="right")
+
+    def _format_log_line(self, entry):
+        timestamp = entry.get("timestamp", "")
+        level = entry.get("level", "INFO")
+        source = entry.get("source", "APP")
+        message = str(entry.get("message", ""))
+        return f"[{timestamp}] [{level}] [{source}] {message}"
+
+    def _append_log_entry(self, entry):
+        line = self._format_log_line(entry)
+        self.log_history.append(line)
+        if len(self.log_history) > self.max_log_history:
+            self.log_history = self.log_history[-self.max_log_history :]
+
+        if self.output_text and self.output_text.winfo_exists():
+            self.output_text.config(state="normal")
+            self.output_text.insert("end", line + "\n")
+            self.output_text.see("end")
+            self.output_text.config(state="disabled")
+
+    def open_output_terminal(self):
+        if self.output_window and self.output_window.winfo_exists():
+            self.output_window.deiconify()
+            self.output_window.lift()
+            self.output_window.focus_force()
+            return
+
+        self.output_window = tk.Toplevel(self.root)
+        self.output_window.title("Focus Engine - Live Output")
+        self.output_window.geometry("900x520")
+        self.output_window.configure(bg=self.bg_color)
+
+        header = tk.Label(
+            self.output_window,
+            text="Live Input / Output / Errors",
+            bg=self.bg_color,
+            fg="#b58900",
+            font=("Helvetica", 12, "bold"),
+        )
+        header.pack(anchor="w", padx=12, pady=(10, 6))
+
+        self.output_text = ScrolledText(
+            self.output_window,
+            wrap="word",
+            font=("Consolas", 9),
+            bg="#002b36",
+            fg="#93a1a1",
+            insertbackground="#93a1a1",
+        )
+        self.output_text.pack(expand=True, fill="both", padx=12, pady=(0, 10))
+        self.output_text.config(state="normal")
+        for line in self.log_history:
+            self.output_text.insert("end", line + "\n")
+        self.output_text.see("end")
+        self.output_text.config(state="disabled")
+
+        def _on_close():
+            if self.output_window and self.output_window.winfo_exists():
+                self.output_window.destroy()
+            self.output_window = None
+            self.output_text = None
+
+        self.output_window.protocol("WM_DELETE_WINDOW", _on_close)
 
     def _on_save_settings(self):
         new_device = self.device_var.get()
@@ -617,6 +695,26 @@ class UIManager:
                     )
                 elif event_type == "ERROR":
                     self._on_error(event.get("value"))
+        except queue.Empty:
+            pass
+        except (tk.TclError, AttributeError):
+            return
+
+        # Process terminal logs from background workers.
+        try:
+            while True:
+                entry = self.log_queue.get_nowait()
+                if isinstance(entry, dict):
+                    self._append_log_entry(entry)
+                else:
+                    self._append_log_entry(
+                        {
+                            "timestamp": "",
+                            "level": "INFO",
+                            "source": "APP",
+                            "message": str(entry),
+                        }
+                    )
         except queue.Empty:
             pass
         except (tk.TclError, AttributeError):

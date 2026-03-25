@@ -2,6 +2,8 @@ import sys
 import os
 import subprocess
 import tkinter as tk
+import queue
+from datetime import datetime
 import config_manager
 
 def install_dependencies():
@@ -80,6 +82,44 @@ class AutoFlushLogger:
     def flush(self):
         self.log.flush()
 
+
+class StreamTee:
+    """Duplicate stream output to a sink callback while preserving original behavior."""
+
+    def __init__(self, stream, sink=None, stream_name="stdout"):
+        self.stream = stream
+        self.sink = sink
+        self.stream_name = stream_name
+
+    def write(self, message):
+        if self.stream:
+            self.stream.write(message)
+        if self.sink:
+            self.sink(message, source=self.stream_name)
+
+    def flush(self):
+        if self.stream:
+            self.stream.flush()
+
+
+def _build_log_sink(target_queue):
+    """Return a function that writes structured log events into a queue."""
+
+    def _sink(message, level="INFO", source="SYSTEM"):
+        text = str(message or "")
+        if not text.strip():
+            return
+        target_queue.put(
+            {
+                "timestamp": datetime.now().strftime("%H:%M:%S"),
+                "level": level,
+                "source": source,
+                "message": text.rstrip("\n"),
+            }
+        )
+
+    return _sink
+
 if sys.stdout is None or sys.stderr is None:
     logger = AutoFlushLogger(log_file)
     if sys.stdout is None:
@@ -100,8 +140,16 @@ def main():
     # re-importing heavy ML libraries and potentially spawning more sub-processes
     from ui_manager import UIManager, SplashScreen
     import threading
-    import queue
     
+    app_log_queue = queue.Queue()
+    emit_log = _build_log_sink(app_log_queue)
+
+    # Tee stdout/stderr to the UI terminal stream while preserving current behavior.
+    if not isinstance(sys.stdout, StreamTee):
+        sys.stdout = StreamTee(sys.stdout, sink=emit_log, stream_name="STDOUT")
+    if not isinstance(sys.stderr, StreamTee):
+        sys.stderr = StreamTee(sys.stderr, sink=lambda msg, source="STDERR": emit_log(msg, level="ERROR", source=source), stream_name="STDERR")
+
     # First Run / Model Path Check
     model_path = config_manager.get_model_path()
     if not model_path:
@@ -134,6 +182,7 @@ def main():
             engine = FocusEngine(
                 model_path=model_path,
                 status_callback=lambda msg: splash.status_queue.put(msg), 
+                trace_callback=emit_log,
                 device=device
             )
             result_queue.put(("SUCCESS", engine))
@@ -208,6 +257,7 @@ def main():
                 new_engine = FocusEngine(
                     model_path=model_path,
                     status_callback=lambda msg: new_splash.status_queue.put(msg),
+                    trace_callback=emit_log,
                     device=new_device
                 )
                 result_queue.put(("SUCCESS", new_engine))
@@ -239,10 +289,17 @@ def main():
         start_callback=lambda task: _start_monitoring(task),
         stop_callback=lambda: _stop_monitoring(),
         reset_callback=lambda: _reset_monitoring(),
-        settings_changed_callback=_handle_settings_changed
+        settings_changed_callback=_handle_settings_changed,
+        log_queue=app_log_queue,
     )
 
-    monitor = MonitorLoop(engine, ui.status_queue, ui.event_queue, device=config_manager.get_device())
+    monitor = MonitorLoop(
+        engine,
+        ui.status_queue,
+        ui.event_queue,
+        device=config_manager.get_device(),
+        log_callback=emit_log,
+    )
 
     def _start_monitoring(task):
         monitor.start(task)
