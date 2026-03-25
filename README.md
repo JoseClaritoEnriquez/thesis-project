@@ -85,3 +85,9 @@ python build_exe.py
 
 ### 2. Create the Installer
 Use Inno Setup to compile `FocusEngine/installer.iss`. The output will be in `FocusEngine/InstallerOutput`.
+
+## One-Pass Match Workflow
+
+For manual single-pass `MATCH`/`MISMATCH` checks against an intended task, use:
+
+- `FocusEngine/one_pass_match_check_workflow.md`

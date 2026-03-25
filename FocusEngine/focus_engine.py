@@ -4,6 +4,7 @@ import subprocess
 import threading
 import inspect
 import importlib
+import ctypes
 
 import pyautogui
 from PIL import Image
@@ -14,6 +15,38 @@ import config_manager
 # Qwen-VL allocates a large image token block (often >=1024 tokens). n_ctx=2048 cannot
 # fit image + prompt + generation and triggers decode failures and poisoned handler state.
 LLAMA_VL_N_CTX = 8192
+DEFAULT_GENERATION_OPTIONS = {
+    "max_tokens": 200,
+    "temperature": 0.1,
+}
+VERDICT_GENERATION_OPTIONS = {
+    "max_tokens": 220,
+    "temperature": 0.0,
+}
+
+_llama_noop_log_callback = None
+
+
+def _silence_llama_cpp_logs():
+    """Drop llama.cpp ggml_log lines (e.g. llama_context, load_hparams) that still print with verbose=False."""
+    global _llama_noop_log_callback
+    if _llama_noop_log_callback is not None:
+        return
+    import llama_cpp.llama_cpp as _lc
+
+    @_lc.llama_log_callback
+    def _noop(_level, _text, _user_data):
+        pass
+
+    _llama_noop_log_callback = _noop
+    _lc.llama_log_set(_noop, ctypes.c_void_p(0))
+
+
+def _suppress_llama_native_io():
+    """Context manager: silence OS-level stderr/stdout from llama.cpp during native calls."""
+    from llama_cpp._utils import suppress_stdout_stderr
+
+    return suppress_stdout_stderr(disable=False)
 
 
 def _sanitize_model_text(text):
@@ -21,9 +54,17 @@ def _sanitize_model_text(text):
     if text is None:
         return ""
     cleaned = str(text)
-    cleaned = re.sub(r"<think>.*?</think>", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
-    # Some runtimes emit an opening <think> tag without closing it.
-    cleaned = re.sub(r"<think>.*$", "", cleaned, flags=re.IGNORECASE | re.DOTALL)
+    # Preserve the content inside <think> blocks (strip tags only).
+    # Some models wrap the whole response in <think>, and we still want to keep
+    # structured fields like `ObservedActivity:` / `Reasoning:` for parsing.
+    cleaned = re.sub(
+        r"<think>\s*(.*?)\s*</think>",
+        lambda m: m.group(1),
+        cleaned,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
+    # Some runtimes emit an opening <think> tag without closing it; drop only the tag.
+    cleaned = re.sub(r"<think>", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"</?think>", "", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"\r\n?", "\n", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
@@ -188,6 +229,8 @@ class LlamaCppBackend(FocusEngineBackend):
 
         from llama_cpp import Llama
 
+        _silence_llama_cpp_logs()
+
         llm_path, mmproj_path = find_qwen_vl_assets(model_path)
         if not llm_path or not mmproj_path:
             raise RuntimeError(
@@ -201,7 +244,9 @@ class LlamaCppBackend(FocusEngineBackend):
         self._llm_path = llm_path
         self._mmproj_path = mmproj_path
         self._chat_handler = chat_handler
+        self._chat_handler_name = handler_name
         self._active_n_gpu_layers = n_gpu_layers
+        self._llama_cpp_version = getattr(importlib.import_module("llama_cpp"), "__version__", "unknown")
 
         self.report(
             f"Loading llama.cpp backend (runtime={runtime}, n_gpu_layers={n_gpu_layers}, "
@@ -227,13 +272,14 @@ class LlamaCppBackend(FocusEngineBackend):
         from llama_cpp import Llama
 
         self._active_n_gpu_layers = n_gpu_layers
-        return Llama(
-            model_path=self._llm_path,
-            chat_handler=self._chat_handler,
-            n_gpu_layers=n_gpu_layers,
-            n_ctx=LLAMA_VL_N_CTX,
-            verbose=False,
-        )
+        with _suppress_llama_native_io():
+            return Llama(
+                model_path=self._llm_path,
+                chat_handler=self._chat_handler,
+                n_gpu_layers=n_gpu_layers,
+                n_ctx=LLAMA_VL_N_CTX,
+                verbose=False,
+            )
 
     def _inference_error_is_retryable(self, exc):
         return self._is_recoverable_decode_error(exc) or self._is_template_render_error(
@@ -249,6 +295,7 @@ class LlamaCppBackend(FocusEngineBackend):
             self._mmproj_path, self.effective_runtime
         )
         self._chat_handler = chat_handler
+        self._chat_handler_name = handler_name
         self.report(
             f"Rebuilt VL chat handler ({handler_name}) and Llama after inference failure."
         )
@@ -268,15 +315,26 @@ class LlamaCppBackend(FocusEngineBackend):
         return "nonetype" in str(exc).lower() and "render" in str(exc).lower()
 
     @staticmethod
-    def _plain_completion_prompt(prompt):
+    def _qwen_completion_prompt(prompt):
         return (
-            "You are a precise and helpful assistant.\n\n"
-            f"User:\n{prompt}\n\n"
-            "Assistant:\n"
+            "<|im_start|>system\n"
+            "You are a precise and helpful assistant.\n"
+            "<|im_end|>\n"
+            "<|im_start|>user\n"
+            f"{prompt}\n"
+            "<|im_end|>\n"
+            "<|im_start|>assistant\n"
         )
 
-    def _generate_text_only(self, prompt):
+    def _normalize_generation_options(self, options):
+        merged = dict(DEFAULT_GENERATION_OPTIONS)
+        if options:
+            merged.update(options)
+        return merged
+
+    def _generate_text_only(self, prompt, options=None):
         # Text-only path: avoid multimodal handler fragility when no media is present.
+        gen_options = self._normalize_generation_options(options)
         if hasattr(self.llm, "reset"):
             try:
                 self.llm.reset()
@@ -284,11 +342,11 @@ class LlamaCppBackend(FocusEngineBackend):
                 pass
 
         try:
-            response = self.llm.create_chat_completion(
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=200,
-                temperature=0.1,
-            )
+            with _suppress_llama_native_io():
+                response = self.llm.create_chat_completion(
+                    messages=[{"role": "user", "content": prompt}],
+                    **gen_options,
+                )
             return _sanitize_model_text(response["choices"][0]["message"]["content"])
         except Exception as e:
             if not (self._is_template_render_error(e) or self._is_recoverable_decode_error(e)):
@@ -301,22 +359,34 @@ class LlamaCppBackend(FocusEngineBackend):
                     self.llm.reset()
                 except Exception:
                     pass
-            completion = self.llm.create_completion(
-                prompt=self._plain_completion_prompt(prompt),
-                max_tokens=200,
-                temperature=0.1,
-                stop=["<|im_end|>", "<|im_start|>"],
-            )
+            completion_options = dict(gen_options)
+            completion_options.setdefault("stop", ["<|im_end|>", "<|im_start|>"])
+            with _suppress_llama_native_io():
+                completion = self.llm.create_completion(
+                    prompt=self._qwen_completion_prompt(prompt),
+                    **completion_options,
+                )
             return _sanitize_model_text(completion["choices"][0]["text"])
 
-    def generate(self, prompt, image=None):
+    def get_stack_fingerprint(self):
+        return {
+            "runtime": self.effective_runtime,
+            "llama_cpp_version": self._llama_cpp_version,
+            "chat_handler": self._chat_handler_name,
+            "n_ctx": LLAMA_VL_N_CTX,
+            "model_file": os.path.basename(self._llm_path),
+            "mmproj_file": os.path.basename(self._mmproj_path),
+        }
+
+    def generate(self, prompt, image=None, options=None):
         import base64
         from io import BytesIO
 
+        gen_options = self._normalize_generation_options(options)
         if image is None:
             for attempt in range(2):
                 try:
-                    return self._generate_text_only(prompt)
+                    return self._generate_text_only(prompt, options=gen_options)
                 except Exception as e:
                     if attempt == 0 and self._inference_error_is_retryable(e):
                         self.report(
@@ -349,11 +419,11 @@ class LlamaCppBackend(FocusEngineBackend):
         ]
         for attempt in range(2):
             try:
-                response = self.llm.create_chat_completion(
-                    messages=messages,
-                    max_tokens=200,
-                    temperature=0.1,
-                )
+                with _suppress_llama_native_io():
+                    response = self.llm.create_chat_completion(
+                        messages=messages,
+                        **gen_options,
+                    )
                 raw_content = response["choices"][0]["message"]["content"]
                 return _sanitize_model_text(raw_content)
             except Exception as e:
@@ -373,6 +443,7 @@ class FocusEngine:
                 status_callback(msg)
 
         _report(f"Initializing FocusEngine...")
+        _report(f"Engine module: {os.path.abspath(__file__)}")
 
         self.model_path = model_path or config_manager.get_model_path()
         configured_runtime = device or config_manager.get_device()
@@ -405,6 +476,16 @@ class FocusEngine:
 
             self.backend = LlamaCppBackend(self.model_path, self.runtime, _report)
             config_manager.set_device(self.backend.effective_runtime.upper())
+            stack = self.backend.get_stack_fingerprint()
+            _report(
+                "Stack fingerprint: "
+                f"runtime={stack['runtime']}, "
+                f"llama_cpp={stack['llama_cpp_version']}, "
+                f"chat_handler={stack['chat_handler']}, "
+                f"n_ctx={stack['n_ctx']}, "
+                f"model={stack['model_file']}, "
+                f"mmproj={stack['mmproj_file']}"
+            )
 
             _report("Focus Engine Initialized successfully.")
         except Exception as e:
@@ -413,7 +494,7 @@ class FocusEngine:
 
     def capture_and_process(self, user_task):
         """
-        Captures the screen, parses it through the VLM in two passes, 
+        Captures the screen, runs a single-pass MATCH/MISMATCH check,
         and returns the alignment status.
         """
         print("Capturing screenshot...")
@@ -425,46 +506,37 @@ class FocusEngine:
         screenshot = screenshot.resize(new_size, Image.LANCZOS)
         
         try:
-            # Pass 1: Vision - Objective Description
-            print("Pass 1: Identifying screen content...")
-            vision_prompt = (
-                "Task: Objectively describe the main activity on this screen. "
-                "Output Format: Exactly 2 sentences. "
-                "Sentence 1: Active application and main activity. "
-                "Sentence 2: Specific visual detail confirming the activity. "
-                "Negative Constraint: DO NOT use headers, bullets, or labels like 'key points:'."
-            )
-            description = self.run_inference(vision_prompt, image=screenshot)
-            
-            if isinstance(description, dict) and description.get("status") == "ERROR":
-                print(f"Pass 1 failed: {description.get('reasoning')}")
-                return description
-            description = _sanitize_model_text(description)
-
-            print(f"Screen Description: {description}")
-
-            # Pass 2: Logic - Verdict based on Description (TEXT ONLY)
-            print("Pass 2: Evaluating alignment with task (pure text logic)...")
+            # One-pass multimodal verdict directly from screenshot + intended task.
+            print("One Pass: Evaluating screenshot alignment with intended task...")
             verdict_prompt = (
-                "Task: Decide if <ActualActivity> is the same kind of work as <IntendedTask>.\n"
-                "Use a broad, normal definition: e.g. 'programming' includes writing, editing, "
-                "debugging, running, or configuring software; developer terminals, IDEs, "
-                "stack traces, build logs, and model/runtime setup for an app you are building "
-                "still count as programming. MISMATCH only when the activity is clearly a "
-                "different category (e.g. gaming, social media, video, unrelated reading).\n\n"
-                f"<IntendedTask>{user_task}</IntendedTask>\n"
-                f"<ActualActivity>{description}</ActualActivity>\n\n"
+                "Task: Decide if the current screenshot activity is the same work category as <IntendedTask>.\n"
+                "Rule: Use broad category matching. Example: for <IntendedTask>programming</IntendedTask>, "
+                "coding, debugging, terminal runs, build logs, and runtime setup for the app all count as MATCH. "
+                "Use MISMATCH only when activity is clearly a different category with no immediate contribution.\n\n"
+                "Example Output:\n"
+                "ObservedActivity: Developer debugging Python errors in terminal and IDE.\n"
+                "Reasoning: This is directly part of programming work and supports completion of the intended task.\n"
+                "Verdict: MATCH\n\n"
+                f"<IntendedTask>{user_task}</IntendedTask>\n\n"
                 "Instructions:\n"
-                "1. Output exactly one line.\n"
-                "2. The only allowed output is: 'Verdict: MATCH' or 'Verdict: MISMATCH'.\n"
-                "3. Do not include analysis, thinking tags, or any extra text."
+                "1. Analyze the screenshot and compare by category fit.\n"
+                "2. Output exactly three lines in this exact schema:\n"
+                "ObservedActivity: <what you see on screen>\n"
+                "Reasoning: <short reason supporting your judgement>\n"
+                "Verdict: MATCH or Verdict: MISMATCH\n"
+                "3. Do not include thinking tags or extra sections."
             )
-            print(f"Pass 2 Input Prompt:\n{verdict_prompt}")
-            raw_verdict = self.run_inference(verdict_prompt, image=None)
+            print(f"One Pass Input Prompt:\n{verdict_prompt}")
+            raw_verdict = self.run_inference(
+                verdict_prompt,
+                image=screenshot,
+                options=VERDICT_GENERATION_OPTIONS,
+            )
             if isinstance(raw_verdict, dict) and raw_verdict.get("status") == "ERROR":
                 return raw_verdict
             raw_verdict = _sanitize_model_text(raw_verdict)
-            print(f"Raw Verdict: {raw_verdict}")
+            raw_verdict_str = raw_verdict if isinstance(raw_verdict, str) else str(raw_verdict)
+            print(f"Raw Verdict: {raw_verdict_str!r} (len={len(raw_verdict_str)})")
 
             # 3. Clean up RAM
             import gc
@@ -473,28 +545,56 @@ class FocusEngine:
 
             return self._parse_response(raw_verdict, user_task)
         except Exception as e:
-            print(f"Error in two-pass processing: {e}")
+            print(f"Error in one-pass processing: {e}")
             return {"status": "ERROR", "reasoning": str(e)}
 
-    def run_inference(self, prompt_text, image=None):
+    def run_inference(self, prompt_text, image=None, options=None):
         try:
+            options_tag = ""
+            if options:
+                options_tag = (
+                    f", temperature={options.get('temperature')}, "
+                    f"max_tokens={options.get('max_tokens')}"
+                )
             print(
                 f"Running {self.backend_type} inference "
-                f"(runtime={self.backend.effective_runtime}, image={'PRESENT' if image else 'NONE'})..."
+                f"(runtime={self.backend.effective_runtime}, image={'PRESENT' if image else 'NONE'}"
+                f"{options_tag})..."
             )
-            return self.backend.generate(prompt_text, image)
+            return self.backend.generate(prompt_text, image, options=options)
         except Exception as e:
             print(f"Inference error: {e}")
             return {"status": "ERROR", "reasoning": str(e)}
 
     def _parse_response(self, raw_output, user_task=None):
-        """Extract status and reasoning from model output."""
+        """Extract status, observed activity, and reasoning from model output."""
         if isinstance(raw_output, dict):
             return raw_output
 
         raw_output = _sanitize_model_text(raw_output)
         status = "ALIGNED"  # default
-        reasoning = raw_output 
+        reasoning = raw_output
+        observed_activity = ""
+
+        observed_matches = list(
+            re.finditer(
+                r"ObservedActivity:\s*(.+)",
+                raw_output,
+                re.IGNORECASE,
+            )
+        )
+        if observed_matches:
+            observed_activity = observed_matches[-1].group(1).strip()
+
+        reasoning_matches = list(
+            re.finditer(
+                r"Reasoning:\s*(.+)",
+                raw_output,
+                re.IGNORECASE,
+            )
+        )
+        if reasoning_matches:
+            reasoning = reasoning_matches[-1].group(1).strip()
 
         matches = list(
             re.finditer(
@@ -509,7 +609,11 @@ class FocusEngine:
                 status = "ALIGNED"
             else:
                 status = "UNALIGNED"
-            return {"status": status, "reasoning": reasoning}
+            return {
+                "status": status,
+                "reasoning": reasoning,
+                "observed_activity": observed_activity,
+            }
 
         # Fallback: inspect only the tail to avoid misclassifying echoed prompt text.
         tail = raw_output[-160:].upper()
@@ -520,7 +624,11 @@ class FocusEngine:
         else:
             status = "UNALIGNED"
         
-        return {"status": status, "reasoning": reasoning}
+        return {
+            "status": status,
+            "reasoning": reasoning,
+            "observed_activity": observed_activity,
+        }
 
 if __name__ == "__main__":
     # Quick test function

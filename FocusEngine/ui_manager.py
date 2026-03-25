@@ -543,7 +543,7 @@ class UIManager:
         # Hard exit to ensure no background worker processes keep the app alive on Windows.
         os._exit(0)
 
-    def trigger_intervention(self, task, reasoning):
+    def trigger_intervention(self, task, reasoning, observed_activity=None):
         """Displays the 'Nudge' full-screen topmost modal."""
         if self.is_closing:
             return
@@ -569,6 +569,17 @@ class UIManager:
                 frame, text=f"Reason: {reasoning}",
                 font=("Helvetica", 18), fg="#eee8d5", bg="#dc322f", justify="center", wraplength=800
             ).pack(pady=10)
+
+            if observed_activity:
+                tk.Label(
+                    frame,
+                    text=f"Observed: {observed_activity}",
+                    font=("Helvetica", 16),
+                    fg="#eee8d5",
+                    bg="#dc322f",
+                    justify="center",
+                    wraplength=800,
+                ).pack(pady=10)
 
             def on_return():
                 self.reset_callback()
@@ -599,7 +610,11 @@ class UIManager:
                     if hasattr(self, 'status_label') and self.status_label.winfo_exists():
                         self.status_label.config(text=f"Status: {event.get('value')}")
                 elif event_type == "INTERVENTION":
-                    self.trigger_intervention(event.get("task"), event.get("reason"))
+                    self.trigger_intervention(
+                        event.get("task"),
+                        event.get("reason"),
+                        event.get("observed_activity"),
+                    )
                 elif event_type == "ERROR":
                     self._on_error(event.get("value"))
         except queue.Empty:

@@ -82,6 +82,7 @@ class MonitorLoop:
                 
                 status = result.get("status", "UNKNOWN")
                 reasoning = result.get("reasoning", "")
+                observed_activity = result.get("observed_activity", "")
                 
                 if status == "ERROR":
                     print(f"Critical error in inference: {reasoning}")
@@ -94,10 +95,13 @@ class MonitorLoop:
                 if status == "UNALIGNED":
                     self.unaligned_counter += 1
                     self.total_distractions += 1
-                    print(f"[UNALIGNED] Count: {self.unaligned_counter} (Total: {self.total_distractions}). Reason: {reasoning}")
+                    print(
+                        f"[UNALIGNED] Count: {self.unaligned_counter} (Total: {self.total_distractions}). "
+                        f"Observed: {observed_activity} | Reason: {reasoning}"
+                    )
                 else:
                     self.unaligned_counter = 0
-                    print(f"[ALIGNED] Resetting counter. Reason: {reasoning}")
+                    print(f"[ALIGNED] Resetting counter. Observed: {observed_activity} | Reason: {reasoning}")
 
                 # Always update the status queue for metrics
                 self.status_queue.put({
@@ -109,11 +113,15 @@ class MonitorLoop:
 
                 # Check if we need to trigger an intervention (>= 6)
                 if self.unaligned_counter >= 6:
-                    print(f"Intervention triggered! Counter at {self.unaligned_counter}. Reason: {reasoning}")
+                    print(
+                        f"Intervention triggered! Counter at {self.unaligned_counter}. "
+                        f"Observed: {observed_activity} | Reason: {reasoning}"
+                    )
                     self.event_queue.put({
                         "type": "INTERVENTION", 
                         "task": self.user_task,
-                        "reason": reasoning
+                        "reason": reasoning,
+                        "observed_activity": observed_activity,
                     })
                 else:
                     self.event_queue.put({"type": "STATE", "value": f"IDLE ({self.device})"})
