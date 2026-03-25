@@ -60,6 +60,14 @@ Using the fork profiles enables newer upstream features (including newer chat ha
 5. On first launch, choose your local GGUF model folder when prompted.
 6. The selected model path is saved to `config.json` and reused on next startup.
 
+### Default model assets
+- Default VL model target is `Qwen2.5-VL-3B`.
+- Default Hugging Face repo: `unsloth/Qwen2.5-VL-3B-Instruct-GGUF`.
+- Expected files:
+  - `Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf`
+  - `mmproj-F16.gguf`
+- Runtime/download defaults are centralized in `FocusEngine/focus_engine.py` and mirrored in `FocusEngine/download_model.py`.
+
 Default recommendation is `cpu` profile for widest compatibility, with app-level GPU fallback already handled at runtime.
 If startup auto-installs dependencies, override profile using `FOCUS_ENGINE_RUNTIME_PROFILE` (for example: `jamepeng`, `jamepeng-nvidia`, `jamepeng-amd`, `cpu`).
 

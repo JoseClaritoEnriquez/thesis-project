@@ -33,6 +33,14 @@ Compatibility note:
 - The default `cpu` profile may miss newer handlers/features.
 - Use `jamepeng*` profiles to build from `https://github.com/JamePeng/llama-cpp-python` when you need newer llama-cpp-python capabilities.
 
+Default model assets:
+- Model target: Qwen2.5-VL-3B
+- Hugging Face repo: unsloth/Qwen2.5-VL-3B-Instruct-GGUF
+- Required files:
+  - Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf
+  - mmproj-F16.gguf
+- Runtime/download defaults are defined in focus_engine.py and mirrored in download_model.py.
+
 Startup Procedure
 =================
 

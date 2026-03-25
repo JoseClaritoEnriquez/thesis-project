@@ -15,13 +15,25 @@ import config_manager
 # Qwen-VL allocates a large image token block (often >=1024 tokens). n_ctx=2048 cannot
 # fit image + prompt + generation and triggers decode failures and poisoned handler state.
 LLAMA_VL_N_CTX = 8192
+MODEL_SPEC = {
+    "display_name": "Qwen2.5-VL-3B",
+    "repo_id": "unsloth/Qwen2.5-VL-3B-Instruct-GGUF",
+    "llm_filename": "Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf",
+    "mmproj_filename": "mmproj-F16.gguf",
+    "llm_name_tokens": ("qwen2.5-vl-3b", "qwen2_5-vl-3b", "qwen2.5", "qwen2_5"),
+}
 DEFAULT_GENERATION_OPTIONS = {
     "max_tokens": 200,
     "temperature": 0.1,
 }
-VERDICT_GENERATION_OPTIONS = {
-    "max_tokens": 220,
+OBSERVATION_GENERATION_OPTIONS = {
+    "max_tokens": 80,
     "temperature": 0.0,
+}
+VERDICT_GENERATION_OPTIONS = {
+    "max_tokens": 120,
+    "temperature": 0.0,
+    "stop": ["Thinking Process:", "<think>", "</think>"],
 }
 
 _llama_noop_log_callback = None
@@ -176,13 +188,40 @@ def find_qwen_vl_assets(model_path):
 
     gguf_files = [f for f in os.listdir(model_path) if f.lower().endswith(".gguf")]
     mmproj_candidates = [f for f in gguf_files if "mmproj" in f.lower()]
-    model_candidates = [
-        f for f in gguf_files if "mmproj" not in f.lower() and "qwen3.5-2b" in f.lower()
-    ]
+    preferred_llm_filename = MODEL_SPEC["llm_filename"].lower()
+    preferred_mmproj_filename = MODEL_SPEC["mmproj_filename"].lower()
+    llm_name_tokens = tuple(token.lower() for token in MODEL_SPEC["llm_name_tokens"])
+    model_candidates = [f for f in gguf_files if "mmproj" not in f.lower()]
 
-    mmproj_path = os.path.join(model_path, mmproj_candidates[0]) if mmproj_candidates else None
-    llm_path = os.path.join(model_path, model_candidates[0]) if model_candidates else None
+    preferred_mmproj = next(
+        (f for f in mmproj_candidates if f.lower() == preferred_mmproj_filename),
+        None,
+    )
+    preferred_llm = next(
+        (f for f in model_candidates if f.lower() == preferred_llm_filename),
+        None,
+    )
+    token_matched_llm = next(
+        (f for f in model_candidates if any(token in f.lower() for token in llm_name_tokens)),
+        None,
+    )
+
+    mmproj_file = preferred_mmproj or (mmproj_candidates[0] if mmproj_candidates else None)
+    llm_file = preferred_llm or token_matched_llm or (model_candidates[0] if model_candidates else None)
+
+    mmproj_path = os.path.join(model_path, mmproj_file) if mmproj_file else None
+    llm_path = os.path.join(model_path, llm_file) if llm_file else None
     return llm_path, mmproj_path
+
+
+def _is_target_llm_file(llm_path):
+    if not llm_path:
+        return False
+    name = os.path.basename(str(llm_path)).lower()
+    if name == MODEL_SPEC["llm_filename"].lower():
+        return True
+    tokens = tuple(token.lower() for token in MODEL_SPEC["llm_name_tokens"])
+    return any(token in name for token in tokens)
 
 
 def build_qwen_vl_chat_handler(mmproj_path, runtime):
@@ -234,8 +273,8 @@ class LlamaCppBackend(FocusEngineBackend):
         llm_path, mmproj_path = find_qwen_vl_assets(model_path)
         if not llm_path or not mmproj_path:
             raise RuntimeError(
-                "Missing Qwen 3.5 2B VL assets. Required files: "
-                "Qwen3.5-2B-Q4_K_M.gguf and mmproj-F16.gguf."
+                f"Missing {MODEL_SPEC['display_name']} assets. Required files: "
+                f"{MODEL_SPEC['llm_filename']} and {MODEL_SPEC['mmproj_filename']}."
             )
 
         requested_gpu = runtime in ("cuda", "vulkan")
@@ -458,14 +497,24 @@ class FocusEngine:
 
         try:
             llm_path, mmproj_path = find_qwen_vl_assets(self.model_path)
-            if not llm_path or not mmproj_path:
-                _report("Qwen 3.5 2B VL assets missing. Starting download...")
+            needs_target_download = (
+                not llm_path
+                or not mmproj_path
+                or not _is_target_llm_file(llm_path)
+            )
+            if needs_target_download:
+                if llm_path and not _is_target_llm_file(llm_path):
+                    _report(
+                        "Detected existing non-target VL model in selected folder "
+                        f"({os.path.basename(llm_path)}). Downloading {MODEL_SPEC['display_name']}..."
+                    )
+                else:
+                    _report(f"{MODEL_SPEC['display_name']} assets missing. Starting download...")
                 os.makedirs(self.model_path, exist_ok=True)
-
-                repo_id = "unsloth/Qwen3.5-2B-GGUF"
+                repo_id = MODEL_SPEC["repo_id"]
                 target_files = [
-                    "Qwen3.5-2B-Q4_K_M.gguf",
-                    "mmproj-F16.gguf",
+                    MODEL_SPEC["llm_filename"],
+                    MODEL_SPEC["mmproj_filename"],
                 ]
 
                 for filename in target_files:
@@ -476,6 +525,11 @@ class FocusEngine:
                         local_dir=self.model_path,
                     )
                 _report("Download complete.")
+                llm_path, mmproj_path = find_qwen_vl_assets(self.model_path)
+                if not llm_path or not mmproj_path or not _is_target_llm_file(llm_path):
+                    raise RuntimeError(
+                        f"Failed to resolve {MODEL_SPEC['display_name']} assets after download."
+                    )
 
             self.backend = LlamaCppBackend(self.model_path, self.runtime, _report)
             config_manager.set_device(self.backend.effective_runtime.upper())
@@ -500,9 +554,52 @@ class FocusEngine:
         if self.trace_callback:
             self.trace_callback(message, level=level, source=source)
 
+    @staticmethod
+    def _heuristic_verdict_from_text(user_task, observed_activity):
+        """
+        Deterministic fallback when pass-2 generation fails.
+        Uses task/activity token overlap plus lightweight domain cues.
+        """
+        task_text = str(user_task or "").strip().lower()
+        observed_text = str(observed_activity or "").strip().lower()
+
+        if not observed_text:
+            return "MISMATCH", "No observed activity was extracted from the screenshot."
+
+        distraction_cues = {
+            "youtube", "netflix", "tiktok", "instagram", "facebook",
+            "x", "twitter", "game", "gaming", "reddit",
+        }
+        if any(cue in observed_text for cue in distraction_cues):
+            return "MISMATCH", "Observed activity appears to be entertainment/social media."
+
+        token_pattern = r"[a-z0-9_]+"
+        stop_words = {
+            "the", "a", "an", "to", "for", "of", "and", "or", "on", "in", "is", "are",
+            "this", "that", "with", "by", "from", "as", "at", "be", "it", "user",
+        }
+        task_tokens = {
+            t for t in re.findall(token_pattern, task_text)
+            if len(t) > 2 and t not in stop_words
+        }
+        observed_tokens = {
+            t for t in re.findall(token_pattern, observed_text)
+            if len(t) > 2 and t not in stop_words
+        }
+        overlap = task_tokens.intersection(observed_tokens)
+        if overlap:
+            return "MATCH", "Observed activity shares key terms with the intended task."
+
+        if any(k in task_text for k in ("program", "coding", "code", "debug", "python", "software")):
+            dev_cues = ("ide", "editor", "terminal", "script", "debug", "build", "repo", "commit", "python", "code")
+            if any(cue in observed_text for cue in dev_cues):
+                return "MATCH", "Observed activity shows software development workflow."
+
+        return "MISMATCH", "Observed activity does not clearly match the intended task."
+
     def capture_and_process(self, user_task):
         """
-        Captures the screen, runs a single-pass MATCH/MISMATCH check,
+        Captures the screen, runs a two-pass MATCH/MISMATCH check,
         and returns the alignment status.
         """
         print("Capturing screenshot...")
@@ -514,46 +611,122 @@ class FocusEngine:
         screenshot = screenshot.resize(new_size, Image.LANCZOS)
         
         try:
-            # One-pass multimodal verdict directly from screenshot + intended task.
-            print("One Pass: Evaluating screenshot alignment with intended task...")
-            verdict_prompt = (
-                "Task: Decide if the current screenshot activity is the same work category as <IntendedTask>.\n"
-                "Rule: Use broad category matching. Example: for <IntendedTask>programming</IntendedTask>, "
-                "coding, debugging, terminal runs, build logs, and runtime setup for the app all count as MATCH. "
-                "Use MISMATCH only when activity is clearly a different category with no immediate contribution.\n\n"
-                "Example Output:\n"
-                "ObservedActivity: Developer debugging Python errors in terminal and IDE.\n"
-                "Reasoning: This is directly part of programming work and supports completion of the intended task.\n"
-                "Verdict: MATCH\n\n"
-                f"<IntendedTask>{user_task}</IntendedTask>\n\n"
-                "Instructions:\n"
-                "1. Analyze the screenshot and compare by category fit.\n"
-                "2. Output exactly three lines in this exact schema:\n"
-                "ObservedActivity: <what you see on screen>\n"
-                "Reasoning: <short reason supporting your judgement>\n"
-                "Verdict: MATCH or Verdict: MISMATCH\n"
-                "3. Do not include thinking tags or extra sections."
+            # Pass 1: extract observed activity directly from screenshot.
+            print("Pass 1: Extracting observed activity from screenshot...")
+            observation_prompt = (
+                "Context: You are a desktop activity monitor.\n"
+                "Task: Describe the primary activity in this screenshot.\n\n"
+                f"Intended Goal: {user_task}\n\n"
+                "Format:\n"
+                "ObservedActivity: [One concise sentence describing the foreground app and action]"
             )
-            print(f"One Pass Input Prompt:\n{verdict_prompt}")
+            print(f"Pass 1 Input Prompt:\n{observation_prompt}")
+            self._emit_trace("LLM_INPUT", "ENGINE", observation_prompt)
+            raw_observation = self.run_inference(
+                observation_prompt,
+                image=screenshot,
+                options=OBSERVATION_GENERATION_OPTIONS,
+            )
+            if isinstance(raw_observation, dict) and raw_observation.get("status") == "ERROR":
+                return raw_observation
+            raw_observation = _sanitize_model_text(raw_observation)
+            raw_observation_str = (
+                raw_observation if isinstance(raw_observation, str) else str(raw_observation)
+            )
+            print(f"Raw Observation: {raw_observation_str!r} (len={len(raw_observation_str)})")
+            self._emit_trace("LLM_OUTPUT", "ENGINE", raw_observation_str)
+
+            observed_activity = raw_observation_str
+            observed_match = re.search(
+                r"ObservedActivity:\s*(.+)",
+                raw_observation_str,
+                re.IGNORECASE,
+            )
+            if observed_match:
+                observed_activity = observed_match.group(1).strip()
+            observed_activity = observed_activity.splitlines()[0].strip() if observed_activity else ""
+
+            # Pass 2: strict text-only verdict against intended task.
+            print("Pass 2: Evaluating observed activity against intended task...")
+            verdict_prompt = (
+                "Compare the ObservedActivity to the IntendedTask. Be strict.\n\n"
+                "Example:\n"
+                "IntendedTask: writing code\n"
+                "ObservedActivity: User is watching a full-screen YouTube video of a cat.\n"
+                "Reasoning: YouTube is entertainment, not a coding environment.\n"
+                "Verdict: MISMATCH\n\n"
+                "Data to Evaluate:\n"
+                f"IntendedTask: {user_task}\n"
+                f"ObservedActivity: {observed_activity}\n\n"
+                "Final Output:\n"
+                f"ObservedActivity: {observed_activity}\n"
+                "Reasoning: \n"
+                "After your reasoning, add a new line as exactly: Verdict: MATCH or Verdict: MISMATCH"
+            )
+            print(f"Pass 2 Input Prompt:\n{verdict_prompt}")
             self._emit_trace("LLM_INPUT", "ENGINE", verdict_prompt)
             raw_verdict = self.run_inference(
                 verdict_prompt,
-                image=screenshot,
+                image=None,
                 options=VERDICT_GENERATION_OPTIONS,
             )
             if isinstance(raw_verdict, dict) and raw_verdict.get("status") == "ERROR":
                 return raw_verdict
             raw_verdict = _sanitize_model_text(raw_verdict)
             raw_verdict_str = raw_verdict if isinstance(raw_verdict, str) else str(raw_verdict)
+            if not raw_verdict_str.strip():
+                retry_prompt = (
+                    "Output one label only.\n"
+                    "Allowed labels: MATCH or MISMATCH.\n\n"
+                    f"IntendedTask: {user_task}\n"
+                    f"ObservedActivity: {observed_activity}\n"
+                    "Verdict: "
+                )
+                print("Pass 2 Retry: Empty verdict output; requesting verdict-only label...")
+                self._emit_trace("LLM_INPUT", "ENGINE", retry_prompt)
+                retry_verdict = self.run_inference(
+                    retry_prompt,
+                    image=None,
+                    options={"max_tokens": 6, "temperature": 0.0, "stop": ["\n", ".", ","]},
+                )
+                if not (isinstance(retry_verdict, dict) and retry_verdict.get("status") == "ERROR"):
+                    retry_text = _sanitize_model_text(retry_verdict)
+                    retry_label_match = re.search(
+                        r"\b(MATCH|MISMATCH|ALIGNED|UNALIGNED)\b",
+                        str(retry_text),
+                        re.IGNORECASE,
+                    )
+                    if retry_label_match:
+                        retry_label = retry_label_match.group(1).upper()
+                        normalized = "MATCH" if retry_label in ("MATCH", "ALIGNED") else "MISMATCH"
+                        raw_verdict_str = (
+                            f"ObservedActivity: {observed_activity}\n"
+                            "Reasoning: Verdict recovered via strict label retry.\n"
+                            f"Verdict: {normalized}"
+                        )
+            if not raw_verdict_str.strip():
+                heuristic_verdict, heuristic_reason = self._heuristic_verdict_from_text(
+                    user_task,
+                    observed_activity,
+                )
+                raw_verdict_str = (
+                    f"ObservedActivity: {observed_activity}\n"
+                    f"Reasoning: {heuristic_reason}\n"
+                    f"Verdict: {heuristic_verdict}"
+                )
+                print("Pass 2 Fallback: Using deterministic heuristic verdict.")
             print(f"Raw Verdict: {raw_verdict_str!r} (len={len(raw_verdict_str)})")
             self._emit_trace("LLM_OUTPUT", "ENGINE", raw_verdict_str)
+
+            if "ObservedActivity:" not in raw_verdict_str and observed_activity:
+                raw_verdict_str = f"ObservedActivity: {observed_activity}\n{raw_verdict_str}"
 
             # 3. Clean up RAM
             import gc
             del screenshot
             gc.collect()
 
-            return self._parse_response(raw_verdict, user_task)
+            return self._parse_response(raw_verdict_str, user_task)
         except Exception as e:
             print(f"Error in one-pass processing: {e}")
             self._emit_trace("ERROR", "ENGINE", f"Error in one-pass processing: {e}")
