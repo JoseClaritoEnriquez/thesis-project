@@ -28,8 +28,8 @@ class SessionLogger:
         # Initialize the JSON structure
         self._data = {
             "intended_task": intended_task,
-            "session_start": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            "session_end": None,
+            "start_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "finish_time": None,
             "total_distractions": 0,
             "inferences": [],
             "interventions": [],
@@ -41,12 +41,12 @@ class SessionLogger:
         with open(self.filepath, "w", encoding="utf-8") as f:
             json.dump(self._data, f, indent=2, ensure_ascii=False)
 
-    def log_inference(self, verdict: str, inference_time_ms: int, reasoning: str):
+    def log_inference(self, verdict: str, inference_time_ms: int, observed_activity: str, reasoning: str):
         """Append one inference result to the session log."""
         entry = {
-            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "verdict": verdict,
             "inference_time_ms": inference_time_ms,
+            "observed_activity": observed_activity,
             "reasoning": reasoning,
         }
         with self._lock:
@@ -68,6 +68,6 @@ class SessionLogger:
     def log_session_end(self, total_distractions: int = 0):
         """Write session-end metadata."""
         with self._lock:
-            self._data["session_end"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self._data["finish_time"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self._data["total_distractions"] = total_distractions
             self._flush()

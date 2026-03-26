@@ -674,7 +674,7 @@ class FocusEngine:
             print("Pass 1: Identifying current activity...")
             observation_prompt = (
                 "Context: You are a desktop activity monitor.\n"
-                "Task: Describe the primary activity in this screenshot.\n\n"
+                "Task: Describe the primary activity in this screenshot. IMPORTANT: If you see a terminal, command prompt, or UI showing the 'Intended Goal', ignore it and describe the other visible windows. Do not simply read the Intended Goal text from the screen.\n\n"
                 f"Intended Goal: {user_task}\n\n"
                 "Format:\n"
                 "ObservedActivity: [One concise sentence describing the foreground app and action]"

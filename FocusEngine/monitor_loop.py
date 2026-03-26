@@ -120,6 +120,7 @@ class MonitorLoop:
                     self.session_logger.log_inference(
                         verdict=status,
                         inference_time_ms=latency_ms,
+                        observed_activity=observed_activity,
                         reasoning=reasoning,
                     )
                 
