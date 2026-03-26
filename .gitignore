@@ -119,3 +119,15 @@ FocusEngine/one_pass_match_check_workflow.md
 /.venv311
 FocusEngine/config.json
 FocusEngine/config.json
+model_qwen25_vl_3b_gguf/Qwen2.5-VL-3B-Instruct-Q4_K_M.gguf
+enumerate_gpus.py
+check_ov.py
+check_pyov.py
+check_results.py
+check_results_final.py
+check_version.py
+check_vlm.py
+check_vlm_doc.py
+enumerate_gpus.py
+search_image.py
+test_cuda_hide.py

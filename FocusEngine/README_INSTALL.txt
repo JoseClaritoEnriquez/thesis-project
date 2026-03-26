@@ -25,7 +25,7 @@ llama-cpp-python install profile:
 - amd (Vulkan build)
 - jamepeng-nvidia (fork + CUDA CMake args)
 - jamepeng-amd (fork + Vulkan CMake args)
-- jamepeng-cu126 (default, prebuilt wheel for CUDA 12.6, v0.3.33)
+- jamepeng-cu126 (optional prebuilt wheel for CUDA 12.6, v0.3.33)
 - cpu (prebuilt wheel fallback)
 
 Compatibility note:
@@ -52,6 +52,7 @@ Run from source:
    .\.venv311\Scripts\Activate.ps1
 3. Install dependencies for your profile:
    python install_runtime.py
+   Default profile is now `cpu` for maximum compatibility on fresh Windows installs.
    (Use --profile nvidia or --profile amd for legacy placeholders.)
    To use the JamePeng fork:
    python install_runtime.py --profile jamepeng

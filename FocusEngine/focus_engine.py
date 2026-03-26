@@ -387,6 +387,15 @@ class LlamaCppBackend(FocusEngineBackend):
         Recreate the VL chat handler and Llama instance. Reusing only Llama after decode
         errors can leave the multimodal handler/template in a bad state and break later passes.
         """
+        import gc
+
+        # Force cleanup of old native objects before re-allocating
+        if hasattr(self, "llm"):
+            del self.llm
+        if hasattr(self, "_chat_handler"):
+            del self._chat_handler
+        gc.collect()
+
         chat_handler, handler_name = build_qwen_vl_chat_handler(
             self._mmproj_path, self.effective_runtime
         )
@@ -396,6 +405,7 @@ class LlamaCppBackend(FocusEngineBackend):
             f"Rebuilt VL chat handler ({handler_name}) and Llama after inference failure."
         )
         self.llm = self._build_llm(self._active_n_gpu_layers)
+        gc.collect()
 
     @staticmethod
     def _is_recoverable_decode_error(exc):
@@ -429,40 +439,22 @@ class LlamaCppBackend(FocusEngineBackend):
         return merged
 
     def _generate_text_only(self, prompt, options=None):
-        # Text-only path: avoid multimodal handler fragility when no media is present.
+        # Text-only path: use raw completion with Qwen chat template to bypass
+        # the VL chat handler, which requires image content to render its template.
         gen_options = self._normalize_generation_options(options)
         if hasattr(self.llm, "reset"):
             try:
                 self.llm.reset()
             except Exception:
                 pass
-
-        try:
-            with _suppress_llama_native_io():
-                response = self.llm.create_chat_completion(
-                    messages=[{"role": "user", "content": prompt}],
-                    **gen_options,
-                )
-            return _sanitize_model_text(response["choices"][0]["message"]["content"])
-        except Exception as e:
-            if not (self._is_template_render_error(e) or self._is_recoverable_decode_error(e)):
-                raise
-            self.report(
-                "Text-only chat path failed; switching to plain completion fallback..."
+        completion_options = dict(gen_options)
+        completion_options.setdefault("stop", ["<|im_end|>", "<|im_start|>"])
+        with _suppress_llama_native_io():
+            completion = self.llm.create_completion(
+                prompt=self._qwen_completion_prompt(prompt),
+                **completion_options,
             )
-            if hasattr(self.llm, "reset"):
-                try:
-                    self.llm.reset()
-                except Exception:
-                    pass
-            completion_options = dict(gen_options)
-            completion_options.setdefault("stop", ["<|im_end|>", "<|im_start|>"])
-            with _suppress_llama_native_io():
-                completion = self.llm.create_completion(
-                    prompt=self._qwen_completion_prompt(prompt),
-                    **completion_options,
-                )
-            return _sanitize_model_text(completion["choices"][0]["text"])
+        return _sanitize_model_text(completion["choices"][0]["text"])
 
     def get_stack_fingerprint(self):
         return {
@@ -485,10 +477,16 @@ class LlamaCppBackend(FocusEngineBackend):
                     return self._generate_text_only(prompt, options=gen_options)
                 except Exception as e:
                     if attempt == 0 and self._inference_error_is_retryable(e):
+                        self.report(f"Inference attempt failed: {type(e).__name__}: {e}")
                         self.report(
                             "Recoverable llama error detected. Reinitializing backend and retrying once..."
                         )
                         self._reinitialize_backend()
+                        if hasattr(self.llm, "reset"):
+                            try:
+                                self.llm.reset()
+                            except Exception:
+                                pass
                         continue
                     raise
 
@@ -524,10 +522,16 @@ class LlamaCppBackend(FocusEngineBackend):
                 return _sanitize_model_text(raw_content)
             except Exception as e:
                 if attempt == 0 and self._inference_error_is_retryable(e):
+                    self.report(f"Inference attempt failed: {type(e).__name__}: {e}")
                     self.report(
                         "Recoverable llama error detected. Reinitializing backend and retrying once..."
                     )
                     self._reinitialize_backend()
+                    if hasattr(self.llm, "reset"):
+                        try:
+                            self.llm.reset()
+                        except Exception:
+                            pass
                     continue
                 raise
 

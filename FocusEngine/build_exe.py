@@ -3,6 +3,15 @@ import sys
 import subprocess
 import shutil
 
+def _ensure_runtime_profile(script_dir):
+    """Install runtime deps in the active venv before packaging."""
+    profile = os.environ.get("FOCUS_ENGINE_BUILD_PROFILE", "cpu").strip().lower()
+    installer = os.path.join(script_dir, "install_runtime.py")
+    if not os.path.exists(installer):
+        raise FileNotFoundError(f"Missing runtime installer: {installer}")
+    print(f"Preparing llama-cpp runtime for build (profile={profile})...")
+    subprocess.check_call([sys.executable, installer, "--profile", profile])
+
 def build():
     """
     Automates the PyInstaller build process for Focus Engine.
@@ -33,7 +42,10 @@ def build():
         print(f"Error: Spec file not found at {spec_file}")
         sys.exit(1)
 
-    # 4. Run PyInstaller
+    # 4. Ensure the desired llama runtime is installed before packaging.
+    _ensure_runtime_profile(script_dir)
+
+    # 5. Run PyInstaller
     print(f"Running PyInstaller for {spec_file}...")
     try:
         # We use the spec file to keep hidden imports and assets consistent.
