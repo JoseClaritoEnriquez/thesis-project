@@ -255,7 +255,7 @@ def main():
             "jamespeng-nvidia",
             "jamespeng-amd",
         ],
-        default="jamepeng-cu126",
+        default="cpu",
         help="Runtime backend profile for llama-cpp-python.",
     )
     args = parser.parse_args()

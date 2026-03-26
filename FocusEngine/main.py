@@ -52,7 +52,7 @@ def install_dependencies():
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     installer = os.path.join(script_dir, "install_runtime.py")
-    profile = os.environ.get("FOCUS_ENGINE_RUNTIME_PROFILE", "jamepeng-cu126").strip().lower()
+    profile = os.environ.get("FOCUS_ENGINE_RUNTIME_PROFILE", "cpu").strip().lower()
     if profile in {"jamespeng", "jamespeng-cpu"}:
         profile = "jamepeng"
     if profile == "jamespeng-nvidia":
@@ -67,12 +67,13 @@ def install_dependencies():
         "jamepeng-cpu",
         "jamepeng-nvidia",
         "jamepeng-amd",
+        "jamepeng-cu126",
         "jamespeng",
         "jamespeng-cpu",
         "jamespeng-nvidia",
         "jamespeng-amd",
     }:
-        profile = "jamepeng"
+        profile = "cpu"
 
     if os.path.exists(installer):
         print(f"Checking/Installing dependencies (profile={profile})...")
