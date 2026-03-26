@@ -541,12 +541,10 @@ class FocusEngine:
 
         def _report(msg):
             print(msg)
-            self._emit_trace("INFO", "ENGINE", msg)
-            if status_callback:
-                status_callback(msg)
+            # self._emit_trace("INFO", "ENGINE", msg) # Redundant with StreamTee(STDOUT)
 
-        _report(f"Initializing FocusEngine...")
-        _report(f"Engine module: {os.path.abspath(__file__)}")
+        # _report(f"Initializing FocusEngine...")
+        # _report(f"Engine module: {os.path.abspath(__file__)}")
 
         self.model_path = model_path or config_manager.get_model_path()
         configured_runtime = device or config_manager.get_device()
@@ -663,7 +661,7 @@ class FocusEngine:
         Captures the screen, runs a two-pass MATCH/MISMATCH check,
         and returns the alignment status.
         """
-        print("Capturing screenshot...")
+        # print("Capturing screenshot...")
         screenshot = pyautogui.screenshot()
         max_side = 960
         w, h = screenshot.size
@@ -673,7 +671,7 @@ class FocusEngine:
         
         try:
             # Pass 1: extract observed activity directly from screenshot.
-            print("Pass 1: Extracting observed activity from screenshot...")
+            print("Pass 1: Identifying current activity...")
             observation_prompt = (
                 "Context: You are a desktop activity monitor.\n"
                 "Task: Describe the primary activity in this screenshot.\n\n"
@@ -681,7 +679,7 @@ class FocusEngine:
                 "Format:\n"
                 "ObservedActivity: [One concise sentence describing the foreground app and action]"
             )
-            print(f"Pass 1 Input Prompt:\n{observation_prompt}")
+            # print(f"Pass 1 Input Prompt:\n{observation_prompt}")
             self._emit_trace("LLM_INPUT", "ENGINE", observation_prompt)
             raw_observation = self.run_inference(
                 observation_prompt,
@@ -694,7 +692,7 @@ class FocusEngine:
             raw_observation_str = (
                 raw_observation if isinstance(raw_observation, str) else str(raw_observation)
             )
-            print(f"Raw Observation: {raw_observation_str!r} (len={len(raw_observation_str)})")
+            # print(f"Raw Observation: {raw_observation_str!r} (len={len(raw_observation_str)})")
             self._emit_trace("LLM_OUTPUT", "ENGINE", raw_observation_str)
 
             observed_activity = raw_observation_str
@@ -708,7 +706,7 @@ class FocusEngine:
             observed_activity = observed_activity.splitlines()[0].strip() if observed_activity else ""
 
             # Pass 2: strict text-only verdict against intended task.
-            print("Pass 2: Evaluating observed activity against intended task...")
+            print("Pass 2: Checking alignment with task...")
             verdict_prompt = (
                 "Compare the ObservedActivity to the IntendedTask. Be strict.\n\n"
                 "Example:\n"
@@ -724,7 +722,7 @@ class FocusEngine:
                 "Reasoning: \n"
                 "After your reasoning, add a new line as exactly: Verdict: MATCH or Verdict: MISMATCH"
             )
-            print(f"Pass 2 Input Prompt:\n{verdict_prompt}")
+            # print(f"Pass 2 Input Prompt:\n{verdict_prompt}")
             self._emit_trace("LLM_INPUT", "ENGINE", verdict_prompt)
             raw_verdict = self.run_inference(
                 verdict_prompt,
@@ -776,7 +774,7 @@ class FocusEngine:
                     f"Verdict: {heuristic_verdict}"
                 )
                 print("Pass 2 Fallback: Using deterministic heuristic verdict.")
-            print(f"Raw Verdict: {raw_verdict_str!r} (len={len(raw_verdict_str)})")
+            # print(f"Raw Verdict: {raw_verdict_str!r} (len={len(raw_verdict_str)})")
             self._emit_trace("LLM_OUTPUT", "ENGINE", raw_verdict_str)
 
             if "ObservedActivity:" not in raw_verdict_str and observed_activity:
@@ -801,11 +799,11 @@ class FocusEngine:
                     f", temperature={options.get('temperature')}, "
                     f"max_tokens={options.get('max_tokens')}"
                 )
-            print(
-                f"Running {self.backend_type} inference "
-                f"(runtime={self.backend.effective_runtime}, image={'PRESENT' if image else 'NONE'}"
-                f"{options_tag})..."
-            )
+            # print(
+            #     f"Running {self.backend_type} inference "
+            #     f"(runtime={self.backend.effective_runtime}, image={'PRESENT' if image else 'NONE'}"
+            #     f"{options_tag})..."
+            # )
             return self.backend.generate(prompt_text, image, options=options)
         except Exception as e:
             print(f"Inference error: {e}")

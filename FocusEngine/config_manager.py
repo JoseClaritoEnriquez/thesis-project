@@ -94,6 +94,14 @@ def set_model_path(path):
     config["model_path"] = path
     save_config(config)
 
+def get_one_minute_mode():
+    return load_config().get("one_minute_mode", False)
+
+def set_one_minute_mode(enabled):
+    config = load_config()
+    config["one_minute_mode"] = bool(enabled)
+    save_config(config)
+
 def get_backend():
     # Backward-compatible getter. Backend is fixed to llama-cpp.
     return "llama-cpp"

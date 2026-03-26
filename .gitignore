@@ -131,3 +131,5 @@ check_vlm_doc.py
 enumerate_gpus.py
 search_image.py
 test_cuda_hide.py
+/FocusEngine/venv_test_311
+/FocusEngine/session_logs

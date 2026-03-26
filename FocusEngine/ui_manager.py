@@ -283,7 +283,7 @@ class UIManager:
         self.status_label.pack(side="bottom")
 
     def _build_settings_view(self):
-        """Builds the settings screen for device selection."""
+        """Builds the settings screen."""
         self._clear_frame()
         self.frame = tk.Frame(self.root, bg=self.bg_color, padx=20, pady=20)
         self.frame.pack(expand=True, fill="both")
@@ -293,26 +293,6 @@ class UIManager:
             bg=self.bg_color, fg="#b58900"
         ).pack(pady=(0, 20))
 
-        tk.Label(
-            self.frame, text="Inference Runtime:", bg=self.bg_color, fg=self.fg_color,
-            font=("Helvetica", 10)
-        ).pack(anchor="w")
-
-        available_devices = ["AUTO", "CUDA", "VULKAN", "CPU"]
-
-        self.device_var = tk.StringVar(value=config_manager.get_device())
-        self.device_combo = ttk.Combobox(
-            self.frame, textvariable=self.device_var, values=available_devices,
-            state="readonly", font=("Helvetica", 12)
-        )
-        self.device_combo.pack(pady=10, fill="x")
-
-        tk.Label(
-            self.frame, text="Note: Changing runtime will reload the AI model.",
-            bg=self.bg_color, fg="#cb4b16", font=("Helvetica", 9, "italic"),
-            wraplength=400
-        ).pack(pady=(10, 20))
-
         tk.Button(
             self.frame,
             text="View Output Terminal",
@@ -321,6 +301,13 @@ class UIManager:
             font=("Helvetica", 10, "bold"),
             command=self.open_output_terminal,
         ).pack(fill="x", pady=(0, 15))
+
+        self.one_min_var = tk.BooleanVar(value=config_manager.get_one_minute_mode())
+        tk.Checkbutton(
+            self.frame, text="1-Minute Inference Cycle (Wait if <1m)", variable=self.one_min_var,
+            bg=self.bg_color, fg=self.fg_color, font=("Helvetica", 10),
+            selectcolor=self.bg_color, activebackground=self.bg_color
+        ).pack(anchor="w", pady=(0, 15))
 
         # Button row
         btn_frame = tk.Frame(self.frame, bg=self.bg_color)
@@ -343,7 +330,13 @@ class UIManager:
         level = entry.get("level", "INFO")
         source = entry.get("source", "APP")
         message = str(entry.get("message", ""))
-        return f"[{timestamp}] [{level}] [{source}] {message}"
+        
+        # Simplify common levels/sources to reduce clutter
+        prefix = ""
+        if level != "INFO" or source not in ("STDOUT", "APP", "ENGINE", "MONITOR"):
+            prefix = f" [{level}]"
+        
+        return f"[{timestamp}]{prefix} {message}"
 
     def _append_log_entry(self, entry):
         line = self._format_log_line(entry)
@@ -402,18 +395,9 @@ class UIManager:
         self.output_window.protocol("WM_DELETE_WINDOW", _on_close)
 
     def _on_save_settings(self):
-        new_device = self.device_var.get()
-        old_device = config_manager.get_device()
-        
-        if new_device != old_device:
-            config_manager.set_device(new_device)
-            # Notify main to reload engine
-            if self.settings_changed_callback:
-                self.settings_changed_callback()
-            else:
-                self._build_setup_view()
-        else:
-            self._build_setup_view()
+        if hasattr(self, 'one_min_var'):
+            config_manager.set_one_minute_mode(self.one_min_var.get())
+        self._build_setup_view()
 
     def _on_start(self):
         task = self.task_entry.get().strip()

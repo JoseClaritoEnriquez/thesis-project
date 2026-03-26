@@ -2,5 +2,6 @@
     "device": "CPU",
     "runtime": "cpu",
     "model_path": "C:/Users/Core i5/Documents/documents",
-    "backend": "llama-cpp"
+    "backend": "llama-cpp",
+    "one_minute_mode": false
 }

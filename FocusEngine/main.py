@@ -52,35 +52,63 @@ def install_dependencies():
 
     script_dir = os.path.dirname(os.path.abspath(__file__))
     installer = os.path.join(script_dir, "install_runtime.py")
-    profile = os.environ.get("FOCUS_ENGINE_RUNTIME_PROFILE", "cpu").strip().lower()
-    if profile in {"jamespeng", "jamespeng-cpu"}:
-        profile = "jamepeng"
-    if profile == "jamespeng-nvidia":
-        profile = "jamepeng-nvidia"
-    if profile == "jamespeng-amd":
-        profile = "jamepeng-amd"
-    if profile not in {
-        "cpu",
-        "nvidia",
-        "amd",
-        "jamepeng",
-        "jamepeng-cpu",
-        "jamepeng-nvidia",
-        "jamepeng-amd",
-        "jamepeng-cu126",
-        "jamespeng",
-        "jamespeng-cpu",
-        "jamespeng-nvidia",
-        "jamespeng-amd",
-    }:
-        profile = "cpu"
+    
+    if not os.path.exists(installer):
+        return
 
-    if os.path.exists(installer):
-        print(f"Checking/Installing dependencies (profile={profile})...")
-        try:
-            subprocess.check_call([sys.executable, installer, "--profile", profile])
-        except Exception as e:
-            print(f"Auto-install failed: {e}")
+    import tkinter as tk
+    from tkinter import ttk
+
+    root = tk.Tk()
+    root.title("Hardware Setup")
+    root.geometry("480x320")
+    root.resizable(False, False)
+    root.eval('tk::PlaceWindow . center')
+    root.configure(bg="#fdf6e3")
+
+    tk.Label(
+        root, text="Select your hardware for AI Inference:",
+        font=("Helvetica", 14, "bold"), bg="#fdf6e3", fg="#b58900"
+    ).pack(pady=(25, 5))
+
+    tk.Label(
+        root, text="This determines which version of the inference engine is installed.",
+        font=("Helvetica", 10), bg="#fdf6e3", fg="#657b83"
+    ).pack(pady=(0, 25))
+
+    selected_profile = tk.StringVar(value="jamepeng-cpu")
+
+    options = [
+        ("CPU (Slow but highly compatible)", "jamepeng-cpu"),
+        ("NVIDIA GPU (CUDA - Fast)", "jamepeng-nvidia"),
+        ("AMD GPU (Vulkan - Fast)", "jamepeng-amd")
+    ]
+
+    for text, value in options:
+        rb = tk.Radiobutton(
+            root, text=text, variable=selected_profile, value=value,
+            bg="#fdf6e3", fg="#2aa198", font=("Helvetica", 11, "bold"),
+            activebackground="#fdf6e3", activeforeground="#2aa198", selectcolor="#eee8d5"
+        )
+        rb.pack(anchor="w", padx=80, pady=5)
+
+    def on_submit():
+        root.quit()
+
+    tk.Button(
+        root, text="Install Dependencies", command=on_submit,
+        bg="#2aa198", fg="white", font=("Helvetica", 11, "bold"), padx=20
+    ).pack(pady=30)
+
+    root.mainloop()
+    profile = selected_profile.get()
+    root.destroy()
+
+    print(f"Checking/Installing dependencies (profile={profile})...")
+    try:
+        subprocess.check_call([sys.executable, installer, "--profile", profile])
+    except Exception as e:
+        print(f"Auto-install failed: {e}")
 
 # Run dependency check only if not frozen
 if not getattr(sys, 'frozen', False):
