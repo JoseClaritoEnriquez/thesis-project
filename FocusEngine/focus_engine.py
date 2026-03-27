@@ -57,9 +57,11 @@ from huggingface_hub import hf_hub_download
 
 import config_manager
 
-# Qwen-VL allocates a large image token block (often >=1024 tokens). n_ctx=2048 can be tight,
-# but 8192 consumes significant RAM on CPU. 4096 is a healthy middle ground.
+# Qwen-VL allocates a large image token block (often >=1024 tokens).
+# Increasing n_ctx reduces the chance of "exceeding capacity" during VL tokenization,
+# at the cost of significantly more RAM on CPU.
 LLAMA_VL_N_CTX = 4096
+LLAMA_VL_N_CTX_FALLBACK = 2048
 MODEL_SPEC = {
     "display_name": "Qwen2.5-VL-3B",
     "repo_id": "unsloth/Qwen2.5-VL-3B-Instruct-GGUF",
@@ -72,7 +74,9 @@ DEFAULT_GENERATION_OPTIONS = {
     "temperature": 0.1,
 }
 OBSERVATION_GENERATION_OPTIONS = {
-    "max_tokens": 80,
+    # Observation is a single concise sentence; 40–50 tokens is sufficient and
+    # keeps VL context usage lower for the image-heavy pass.
+    "max_tokens": 50,
     "temperature": 0.0,
 }
 VERDICT_GENERATION_OPTIONS = {
@@ -351,27 +355,45 @@ def _is_target_llm_file(llm_path):
     return any(token in name for token in tokens)
 
 
-def build_qwen_vl_chat_handler(mmproj_path, runtime):
+def _available_qwen_vl_handler_names():
+    chat_module = importlib.import_module("llama_cpp.llama_chat_format")
+    candidate_names = ("Qwen25VLChatHandler", "Qwen2VLChatHandler", "Qwen3VLChatHandler")
+    return [name for name in candidate_names if hasattr(chat_module, name)]
+
+
+def build_qwen_vl_chat_handler(mmproj_path, runtime, preferred_name=None, strict_preferred=False):
     import llama_cpp
 
     chat_module = importlib.import_module("llama_cpp.llama_chat_format")
     # Prefer handlers known to work with the split GGUF+mmproj layout.
-    candidate_names = ("Qwen25VLChatHandler", "Qwen2VLChatHandler", "Qwen3VLChatHandler")
-    available = [name for name in candidate_names if hasattr(chat_module, name)]
+    available = _available_qwen_vl_handler_names()
+    if preferred_name and preferred_name in available:
+        available = [preferred_name] + [name for name in available if name != preferred_name]
 
+    last_type_error = None
     for name in available:
         handler_cls = getattr(chat_module, name)
         init_params = inspect.signature(handler_cls.__init__).parameters
+        accepts_var_kwargs = any(
+            p.kind == inspect.Parameter.VAR_KEYWORD for p in init_params.values()
+        )
         kwargs = {}
-        if "clip_model_path" in init_params:
+        # Some handlers (e.g. Qwen3VLChatHandler) take **kwargs and forward
+        # them to a base MTMD handler that still requires clip_model_path.
+        if "clip_model_path" in init_params or accepts_var_kwargs:
             kwargs["clip_model_path"] = mmproj_path
-        if "use_gpu" in init_params:
+        if "use_gpu" in init_params or accepts_var_kwargs:
             kwargs["use_gpu"] = runtime in ("cuda", "vulkan")
-        if "verbose" in init_params:
+        if "verbose" in init_params or accepts_var_kwargs:
             kwargs["verbose"] = False
         try:
             return handler_cls(**kwargs), name
-        except TypeError:
+        except TypeError as e:
+            last_type_error = e
+            if strict_preferred and preferred_name == name:
+                raise RuntimeError(
+                    f"Preferred chat handler '{name}' failed to initialize: {e}"
+                ) from e
             continue
 
     exported_qwen_vl = [
@@ -415,37 +437,68 @@ class LlamaCppBackend(FocusEngineBackend):
 
         requested_gpu = runtime in ("cuda", "vulkan")
         n_gpu_layers = -1 if requested_gpu else 0
-        chat_handler, handler_name = build_qwen_vl_chat_handler(mmproj_path, runtime)
+        self._handler_candidates = _available_qwen_vl_handler_names()
+        self._handler_index = 0
+        preferred_handler = self._handler_candidates[self._handler_index] if self._handler_candidates else None
+        chat_handler, handler_name = build_qwen_vl_chat_handler(
+            mmproj_path, runtime, preferred_name=preferred_handler
+        )
         self._llm_path = llm_path
         self._mmproj_path = mmproj_path
         self._chat_handler = chat_handler
         self._chat_handler_name = handler_name
         self._active_n_gpu_layers = n_gpu_layers
+        self._active_n_ctx = LLAMA_VL_N_CTX
         self._n_threads = psutil.cpu_count(logical=False) or 4
         self._llama_cpp_version = getattr(importlib.import_module("llama_cpp"), "__version__", "unknown")
         self._kv_clear_warning_emitted = False
 
         self.report(
             f"Loading llama.cpp backend (runtime={runtime}, n_gpu_layers={n_gpu_layers}, "
-            f"n_threads={self._n_threads}, chat_handler={handler_name})..."
+            f"n_threads={self._n_threads}, n_ctx={self._active_n_ctx}, chat_handler={handler_name})..."
         )
         try:
-            self.llm = self._build_llm(n_gpu_layers)
+            self.llm = self._build_llm(n_gpu_layers, n_ctx=self._active_n_ctx)
             self.effective_runtime = runtime
         except Exception as e:
-            if requested_gpu:
+            if self._should_retry_with_lower_ctx(e):
+                self.report(
+                    f"Backend init failed with n_ctx={self._active_n_ctx} ({type(e).__name__}: {e}). "
+                    f"Retrying with n_ctx={LLAMA_VL_N_CTX_FALLBACK}."
+                )
+                self._active_n_ctx = LLAMA_VL_N_CTX_FALLBACK
+                self.llm = self._build_llm(n_gpu_layers, n_ctx=self._active_n_ctx)
+                self.effective_runtime = runtime
+            elif requested_gpu:
                 self.report(
                     f"GPU runtime '{runtime}' failed to initialize ({e}). "
                     "Retrying with CPU runtime."
                 )
-                self.llm = self._build_llm(0)
+                self._active_n_ctx = LLAMA_VL_N_CTX_FALLBACK if self._should_retry_with_lower_ctx(e) else self._active_n_ctx
+                self.llm = self._build_llm(0, n_ctx=self._active_n_ctx)
                 self.effective_runtime = "cpu"
             else:
                 raise
 
         self.report(f"LlamaCpp backend initialized on runtime={self.effective_runtime}.")
 
-    def _build_llm(self, n_gpu_layers):
+    @staticmethod
+    def _should_retry_with_lower_ctx(exc):
+        # Heuristics: wording varies by platform/build, so keep it broad.
+        text = str(exc).lower()
+        return any(
+            needle in text
+            for needle in (
+                "out of memory",
+                "oom",
+                "cannot allocate",
+                "bad alloc",
+                "std::bad_alloc",
+                "memory",
+            )
+        )
+
+    def _build_llm(self, n_gpu_layers, n_ctx):
         from llama_cpp import Llama
 
         self._active_n_gpu_layers = n_gpu_layers
@@ -455,7 +508,8 @@ class LlamaCppBackend(FocusEngineBackend):
             model_path=self._llm_path,
             chat_handler=self._chat_handler,
             n_gpu_layers=n_gpu_layers,
-            n_ctx=LLAMA_VL_N_CTX,
+            n_ctx=n_ctx,
+            n_batch=n_ctx,
             n_threads=getattr(self, "_n_threads", None),
             n_threads_batch=getattr(self, "_n_threads", None),
             verbose=False,
@@ -463,21 +517,42 @@ class LlamaCppBackend(FocusEngineBackend):
 
     def _clear_kv_cache(self):
         """Aggressively clear KV cache to prevent cross-call state contamination
-        between create_completion (text-only) and create_chat_completion (VL)."""
-        cleared_anything = False
-        try:
-            if hasattr(self.llm, "_ctx") and self.llm._ctx is not None:
-                self.llm._ctx.kv_cache_clear()
-                cleared_anything = True
-        except Exception:
-            pass
-        try:
-            if hasattr(self.llm, "reset"):
+        between create_completion (text-only) and create_chat_completion (VL).
+
+        llama-cpp-python 0.3.x renamed the KV cache API:
+          old: _ctx.kv_cache_clear()
+          new: _ctx.memory_clear(data=True)
+        We try both to support whatever version is installed.
+        """
+        cleared_native = False
+        ctx = getattr(self.llm, "_ctx", None)
+        if ctx is not None:
+            # 0.3.33+: memory_clear(data) wipes KV cache and optionally cell data.
+            if hasattr(ctx, "memory_clear"):
+                try:
+                    ctx.memory_clear(True)
+                    cleared_native = True
+                except Exception:
+                    pass
+            # Older builds: kv_cache_clear() (pre-memory API rename).
+            if not cleared_native and hasattr(ctx, "kv_cache_clear"):
+                try:
+                    ctx.kv_cache_clear()
+                    cleared_native = True
+                except Exception:
+                    pass
+
+        # Reset Python-level token counter so the next eval starts at pos 0.
+        if hasattr(self.llm, "reset"):
+            try:
                 self.llm.reset()
-                cleared_anything = True
-        except Exception:
-            pass
-        if not cleared_anything and not self._kv_clear_warning_emitted:
+            except Exception:
+                pass
+        # Direct fallback: forcibly zero n_tokens even if reset() is absent.
+        if hasattr(self.llm, "n_tokens"):
+            self.llm.n_tokens = 0
+
+        if not cleared_native and not self._kv_clear_warning_emitted:
             self.report(
                 "Warning: KV cache clear appears unsupported on this llama-cpp build. "
                 "Cross-call state contamination may still occur."
@@ -503,16 +578,50 @@ class LlamaCppBackend(FocusEngineBackend):
             del self._chat_handler
         gc.collect()
 
-        chat_handler, handler_name = build_qwen_vl_chat_handler(
-            self._mmproj_path, self.effective_runtime
-        )
+        preferred_handler = None
+        if getattr(self, "_handler_candidates", None):
+            preferred_handler = self._handler_candidates[self._handler_index]
+
+        # On retry, first force the selected handler so we can verify whether it
+        # actually works; if it fails to initialize, log why and fall back.
+        if preferred_handler:
+            try:
+                chat_handler, handler_name = build_qwen_vl_chat_handler(
+                    self._mmproj_path,
+                    self.effective_runtime,
+                    preferred_name=preferred_handler,
+                    strict_preferred=True,
+                )
+            except Exception as preferred_exc:
+                self.report(
+                    f"Preferred VL chat handler '{preferred_handler}' failed during retry "
+                    f"({type(preferred_exc).__name__}: {preferred_exc}). Falling back to auto handler selection."
+                )
+                chat_handler, handler_name = build_qwen_vl_chat_handler(
+                    self._mmproj_path, self.effective_runtime
+                )
+        else:
+            chat_handler, handler_name = build_qwen_vl_chat_handler(
+                self._mmproj_path, self.effective_runtime
+            )
         self._chat_handler = chat_handler
         self._chat_handler_name = handler_name
         self.report(
             f"Rebuilt VL chat handler ({handler_name}) and Llama after inference failure."
         )
-        self.llm = self._build_llm(self._active_n_gpu_layers)
+        # Rebuild Llama with the currently active context window.
+        self.llm = self._build_llm(self._active_n_gpu_layers, n_ctx=self._active_n_ctx)
         gc.collect()
+
+    def _advance_chat_handler(self):
+        if not getattr(self, "_handler_candidates", None):
+            return False
+        if len(self._handler_candidates) <= 1:
+            return False
+        self._handler_index = (self._handler_index + 1) % len(self._handler_candidates)
+        next_name = self._handler_candidates[self._handler_index]
+        self.report(f"Switching VL chat handler for retry: {next_name}")
+        return True
 
     @staticmethod
     def _is_recoverable_decode_error(exc):
@@ -568,7 +677,8 @@ class LlamaCppBackend(FocusEngineBackend):
             "runtime": self.effective_runtime,
             "llama_cpp_version": self._llama_cpp_version,
             "chat_handler": self._chat_handler_name,
-            "n_ctx": LLAMA_VL_N_CTX,
+            "n_ctx": self._active_n_ctx,
+            "n_batch": self._active_n_ctx,
             "model_file": os.path.basename(self._llm_path),
             "mmproj_file": os.path.basename(self._mmproj_path),
         }
@@ -588,6 +698,7 @@ class LlamaCppBackend(FocusEngineBackend):
                         self.report(
                             "Recoverable llama error detected. Reinitializing backend and retrying once..."
                         )
+                        self._advance_chat_handler()
                         self._reinitialize_backend()
                         self._clear_kv_cache()
                         continue
@@ -595,9 +706,17 @@ class LlamaCppBackend(FocusEngineBackend):
 
         self._clear_kv_cache()
 
+        # Diagnostics payload for retryable VL failures.
+        # Keeping this computed once avoids overhead, while still providing useful context.
+        img_w, img_h = getattr(image, "size", (None, None))
+        jpeg_bytes_len = None
+        img_b64_len = None
+
         buffered = BytesIO()
         image.save(buffered, format="JPEG")
+        jpeg_bytes_len = len(buffered.getvalue())
         img_str = base64.b64encode(buffered.getvalue()).decode("utf-8")
+        img_b64_len = len(img_str)
         image_url = f"data:image/jpeg;base64,{img_str}"
 
         messages = [
@@ -617,13 +736,30 @@ class LlamaCppBackend(FocusEngineBackend):
                         **gen_options,
                     )
                 raw_content = response["choices"][0]["message"]["content"]
-                return _sanitize_model_text(raw_content)
+                result = _sanitize_model_text(raw_content)
+                self._clear_kv_cache()
+                return result
             except Exception as e:
                 if attempt == 0 and self._inference_error_is_retryable(e):
                     self.report(f"Inference attempt failed: {type(e).__name__}: {e}")
+                    # Print minimal-but-actionable request diagnostics.
+                    # The decoder error often correlates with VL "input batch" size (vision token block).
+                    self.report(
+                        "VL input diagnostics: "
+                        f"img_size={img_w}x{img_h}, "
+                        f"jpeg_bytes={jpeg_bytes_len}, "
+                        f"img_b64_chars={img_b64_len}, "
+                        f"prompt_chars={len(str(prompt or ''))}, "
+                        f"gen_max_tokens={gen_options.get('max_tokens')}, "
+                        f"gen_temperature={gen_options.get('temperature')}, "
+                        f"n_ctx={self._active_n_ctx}, "
+                        f"chat_handler={getattr(self, '_chat_handler_name', None)}, "
+                        f"handler_candidates={getattr(self, '_handler_candidates', [])}"
+                    )
                     self.report(
                         "Recoverable llama error detected. Reinitializing backend and retrying once..."
                     )
+                    self._advance_chat_handler()
                     self._reinitialize_backend()
                     self._clear_kv_cache()
                     continue
@@ -785,11 +921,19 @@ class FocusEngine:
             _hide_app_windows()
             screenshot = pyautogui.screenshot()
 
+            # Use a downscale for 1080p (longest side 960) to retain
+            # more detail, relying on the higher n_ctx and retry safeguards.
             max_side = 960
             w, h = screenshot.size
             scale = min(max_side / w, max_side / h, 1.0)
             new_size = (int(w * scale), int(h * scale))
             screenshot = screenshot.resize(new_size, Image.LANCZOS)
+            # Diagnostics: helps correlate "input batch"/capacity errors with frame scale.
+            print(
+                f"[VL DIAGNOSTICS] screenshot_original={w}x{h}, "
+                f"resize_max_side={max_side}, scale={scale:.4f}, "
+                f"screenshot_resized={new_size[0]}x{new_size[1]}"
+            )
             self._track_screenshot_fingerprint(screenshot)
 
             # Pass 1: extract observed activity directly from screenshot.
