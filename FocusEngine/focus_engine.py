@@ -6,6 +6,7 @@ import inspect
 import importlib
 import ctypes
 import sys
+import hashlib
 
 def _ensure_win32_cuda_dlls():
     """
@@ -125,6 +126,88 @@ def _sanitize_model_text(text):
     cleaned = re.sub(r"\r\n?", "\n", cleaned)
     cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
     return cleaned.strip()
+
+
+# ---------------------------------------------------------------------------
+# Screenshot window management: hide the app's own windows so the VL model
+# doesn't observe them and produce self-referential "ALIGNED" verdicts.
+# ---------------------------------------------------------------------------
+
+def _hide_app_windows():
+    """Minimize FocusEngine windows and the console before screenshot capture.
+    Returns a list of (hwnd, was_zoomed) tuples to restore later."""
+    if sys.platform != "win32":
+        return []
+
+    import time
+    from ctypes import wintypes
+
+    user32 = ctypes.windll.user32
+    kernel32 = ctypes.windll.kernel32
+
+    SW_MINIMIZE = 6
+    hidden = []
+    seen_hwnds = set()
+
+    # 1. Minimize the console window (the terminal running python main.py)
+    try:
+        console_hwnd = kernel32.GetConsoleWindow()
+        if (
+            console_hwnd
+            and user32.IsWindowVisible(console_hwnd)
+            and not user32.IsIconic(console_hwnd)
+        ):
+            was_zoomed = bool(user32.IsZoomed(console_hwnd))
+            user32.ShowWindow(console_hwnd, SW_MINIMIZE)
+            hidden.append((console_hwnd, was_zoomed))
+            seen_hwnds.add(int(console_hwnd))
+    except Exception:
+        pass
+
+    # 2. Minimize all windows with "focus engine" in their title
+    WNDENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def _enum_cb(hwnd, _lparam):
+        try:
+            if user32.IsWindowVisible(hwnd):
+                length = user32.GetWindowTextLengthW(hwnd)
+                if length > 0:
+                    buf = ctypes.create_unicode_buffer(length + 1)
+                    user32.GetWindowTextW(hwnd, buf, length + 1)
+                    if "focus engine" in buf.value.lower():
+                        hwnd_int = int(hwnd)
+                        if hwnd_int not in seen_hwnds and not user32.IsIconic(hwnd):
+                            was_zoomed = bool(user32.IsZoomed(hwnd))
+                            user32.ShowWindow(hwnd, SW_MINIMIZE)
+                            hidden.append((hwnd, was_zoomed))
+                            seen_hwnds.add(hwnd_int)
+        except Exception:
+            pass
+        return True
+
+    cb = WNDENUMPROC(_enum_cb)
+    user32.EnumWindows(cb, 0)
+
+    if hidden:
+        time.sleep(0.4)
+
+    return hidden
+
+
+def _restore_app_windows(handles):
+    """Restore previously minimized windows."""
+    if sys.platform != "win32" or not handles:
+        return
+
+    user32 = ctypes.windll.user32
+    SW_RESTORE = 9
+    SW_MAXIMIZE = 3
+
+    for hwnd, was_zoomed in handles:
+        try:
+            user32.ShowWindow(hwnd, SW_MAXIMIZE if was_zoomed else SW_RESTORE)
+        except Exception:
+            pass
 
 # Custom Progress Reporter to pipe Hugging Face status to the UI
 class ProgressReporter:
@@ -340,6 +423,7 @@ class LlamaCppBackend(FocusEngineBackend):
         self._active_n_gpu_layers = n_gpu_layers
         self._n_threads = psutil.cpu_count(logical=False) or 4
         self._llama_cpp_version = getattr(importlib.import_module("llama_cpp"), "__version__", "unknown")
+        self._kv_clear_warning_emitted = False
 
         self.report(
             f"Loading llama.cpp backend (runtime={runtime}, n_gpu_layers={n_gpu_layers}, "
@@ -376,6 +460,29 @@ class LlamaCppBackend(FocusEngineBackend):
             n_threads_batch=getattr(self, "_n_threads", None),
             verbose=False,
         )
+
+    def _clear_kv_cache(self):
+        """Aggressively clear KV cache to prevent cross-call state contamination
+        between create_completion (text-only) and create_chat_completion (VL)."""
+        cleared_anything = False
+        try:
+            if hasattr(self.llm, "_ctx") and self.llm._ctx is not None:
+                self.llm._ctx.kv_cache_clear()
+                cleared_anything = True
+        except Exception:
+            pass
+        try:
+            if hasattr(self.llm, "reset"):
+                self.llm.reset()
+                cleared_anything = True
+        except Exception:
+            pass
+        if not cleared_anything and not self._kv_clear_warning_emitted:
+            self.report(
+                "Warning: KV cache clear appears unsupported on this llama-cpp build. "
+                "Cross-call state contamination may still occur."
+            )
+            self._kv_clear_warning_emitted = True
 
     def _inference_error_is_retryable(self, exc):
         return self._is_recoverable_decode_error(exc) or self._is_template_render_error(
@@ -442,11 +549,7 @@ class LlamaCppBackend(FocusEngineBackend):
         # Text-only path: use raw completion with Qwen chat template to bypass
         # the VL chat handler, which requires image content to render its template.
         gen_options = self._normalize_generation_options(options)
-        if hasattr(self.llm, "reset"):
-            try:
-                self.llm.reset()
-            except Exception:
-                pass
+        self._clear_kv_cache()
         completion_options = dict(gen_options)
         completion_options.setdefault("stop", ["<|im_end|>", "<|im_start|>"])
         with _suppress_llama_native_io():
@@ -454,7 +557,11 @@ class LlamaCppBackend(FocusEngineBackend):
                 prompt=self._qwen_completion_prompt(prompt),
                 **completion_options,
             )
-        return _sanitize_model_text(completion["choices"][0]["text"])
+        result = _sanitize_model_text(completion["choices"][0]["text"])
+        # Clear cache after text-only completion so the next VL chat call
+        # doesn't hit a stale KV state from the raw completion API.
+        self._clear_kv_cache()
+        return result
 
     def get_stack_fingerprint(self):
         return {
@@ -482,20 +589,11 @@ class LlamaCppBackend(FocusEngineBackend):
                             "Recoverable llama error detected. Reinitializing backend and retrying once..."
                         )
                         self._reinitialize_backend()
-                        if hasattr(self.llm, "reset"):
-                            try:
-                                self.llm.reset()
-                            except Exception:
-                                pass
+                        self._clear_kv_cache()
                         continue
                     raise
 
-        # Avoid stale KV/cache state across alternating image/text turns.
-        if hasattr(self.llm, "reset"):
-            try:
-                self.llm.reset()
-            except Exception:
-                pass
+        self._clear_kv_cache()
 
         buffered = BytesIO()
         image.save(buffered, format="JPEG")
@@ -527,17 +625,15 @@ class LlamaCppBackend(FocusEngineBackend):
                         "Recoverable llama error detected. Reinitializing backend and retrying once..."
                     )
                     self._reinitialize_backend()
-                    if hasattr(self.llm, "reset"):
-                        try:
-                            self.llm.reset()
-                        except Exception:
-                            pass
+                    self._clear_kv_cache()
                     continue
                 raise
 
 class FocusEngine:
     def __init__(self, model_path=None, status_callback=None, device=None, backend=None, trace_callback=None):
         self.trace_callback = trace_callback
+        self._last_screenshot_hash = None
+        self._same_screenshot_streak = 0
 
         def _report(msg):
             print(msg)
@@ -656,20 +752,46 @@ class FocusEngine:
 
         return "MISMATCH", "Observed activity does not clearly match the intended task."
 
+    def _track_screenshot_fingerprint(self, screenshot):
+        """
+        Debug aid for suspected 'stuck frame' captures.
+        We hash the resized frame and log when many consecutive captures are identical.
+        """
+        try:
+            frame_hash = hashlib.sha1(screenshot.tobytes()).hexdigest()[:12]
+        except Exception:
+            return
+
+        if frame_hash == self._last_screenshot_hash:
+            self._same_screenshot_streak += 1
+        else:
+            self._same_screenshot_streak = 0
+            self._last_screenshot_hash = frame_hash
+
+        repeated_frames = self._same_screenshot_streak + 1
+        if repeated_frames in (4, 8, 16):
+            print(
+                "Notice: consecutive screenshots are byte-identical "
+                f"for {repeated_frames} captures (frame_hash={frame_hash})."
+            )
+
     def capture_and_process(self, user_task):
         """
         Captures the screen, runs a two-pass MATCH/MISMATCH check,
         and returns the alignment status.
         """
-        # print("Capturing screenshot...")
-        screenshot = pyautogui.screenshot()
-        max_side = 960
-        w, h = screenshot.size
-        scale = min(max_side / w, max_side / h, 1.0)
-        new_size = (int(w * scale), int(h * scale))
-        screenshot = screenshot.resize(new_size, Image.LANCZOS)
-        
+        screenshot = None
         try:
+            _hide_app_windows()
+            screenshot = pyautogui.screenshot()
+
+            max_side = 960
+            w, h = screenshot.size
+            scale = min(max_side / w, max_side / h, 1.0)
+            new_size = (int(w * scale), int(h * scale))
+            screenshot = screenshot.resize(new_size, Image.LANCZOS)
+            self._track_screenshot_fingerprint(screenshot)
+
             # Pass 1: extract observed activity directly from screenshot.
             print("Pass 1: Identifying current activity...")
             observation_prompt = (
@@ -780,16 +902,20 @@ class FocusEngine:
             if "ObservedActivity:" not in raw_verdict_str and observed_activity:
                 raw_verdict_str = f"ObservedActivity: {observed_activity}\n{raw_verdict_str}"
 
-            # 3. Clean up RAM
-            import gc
-            del screenshot
-            gc.collect()
-
             return self._parse_response(raw_verdict_str, user_task)
         except Exception as e:
             print(f"Error in one-pass processing: {e}")
             self._emit_trace("ERROR", "ENGINE", f"Error in one-pass processing: {e}")
             return {"status": "ERROR", "reasoning": str(e)}
+        finally:
+            # Clean up frame buffer even when any pass fails.
+            if screenshot is not None:
+                try:
+                    del screenshot
+                except Exception:
+                    pass
+            import gc
+            gc.collect()
 
     def run_inference(self, prompt_text, image=None, options=None):
         try:

@@ -309,6 +309,20 @@ class UIManager:
             selectcolor=self.bg_color, activebackground=self.bg_color
         ).pack(anchor="w", pady=(0, 15))
 
+        self.intervention_enabled_var = tk.BooleanVar(
+            value=config_manager.get_intervention_enabled()
+        )
+        tk.Checkbutton(
+            self.frame,
+            text="Enable Focus Intervention (Nudge Popup)",
+            variable=self.intervention_enabled_var,
+            bg=self.bg_color,
+            fg=self.fg_color,
+            font=("Helvetica", 10),
+            selectcolor=self.bg_color,
+            activebackground=self.bg_color,
+        ).pack(anchor="w", pady=(0, 15))
+
         # Button row
         btn_frame = tk.Frame(self.frame, bg=self.bg_color)
         btn_frame.pack(fill="x", side="bottom")
@@ -397,6 +411,8 @@ class UIManager:
     def _on_save_settings(self):
         if hasattr(self, 'one_min_var'):
             config_manager.set_one_minute_mode(self.one_min_var.get())
+        if hasattr(self, 'intervention_enabled_var'):
+            config_manager.set_intervention_enabled(self.intervention_enabled_var.get())
         self._build_setup_view()
 
     def _on_start(self):

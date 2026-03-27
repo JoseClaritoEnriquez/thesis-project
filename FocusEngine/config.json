@@ -3,5 +3,6 @@
     "runtime": "cpu",
     "model_path": "C:/Users/Core i5/Documents/documents",
     "backend": "llama-cpp",
-    "one_minute_mode": false
+    "one_minute_mode": false,
+    "intervention_enabled": false
 }

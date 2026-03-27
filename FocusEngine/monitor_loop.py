@@ -130,11 +130,9 @@ class MonitorLoop:
                     print(
                         f"[UNALIGNED] Observed: {observed_activity} | Reason: {reasoning}"
                     )
-                    # self._emit_log(...) # Redundant
                 else:
                     self.unaligned_counter = 0
                     print(f"[ALIGNED] Observed: {observed_activity}")
-                    # self._emit_log(...) # Redundant
 
                 # Always update the status queue for metrics
                 self.status_queue.put({
@@ -146,25 +144,32 @@ class MonitorLoop:
 
                 # Check if we need to trigger an intervention (>= 6)
                 if self.unaligned_counter >= 6:
-                    print(
-                        f"Intervention triggered! Counter at {self.unaligned_counter}. "
-                        f"Observed: {observed_activity} | Reason: {reasoning}"
-                    )
-                    self._emit_log(
-                        f"Intervention triggered at {self.unaligned_counter}. Observed: {observed_activity} | Reason: {reasoning}",
-                        level="ERROR",
-                    )
-                    self.event_queue.put({
-                        "type": "INTERVENTION", 
-                        "task": self.user_task,
-                        "reason": reasoning,
-                        "observed_activity": observed_activity,
-                    })
-                    if self.session_logger:
-                        self.session_logger.log_intervention(
-                            observed_activity=observed_activity,
-                            reasoning=reasoning,
-                            counter=self.unaligned_counter,
+                    intervention_enabled = config_manager.get_intervention_enabled()
+                    if intervention_enabled:
+                        print(
+                            f"Intervention triggered! Counter at {self.unaligned_counter}. "
+                            f"Observed: {observed_activity} | Reason: {reasoning}"
+                        )
+                        self._emit_log(
+                            f"Intervention triggered at {self.unaligned_counter}. Observed: {observed_activity} | Reason: {reasoning}",
+                            level="ERROR",
+                        )
+                        self.event_queue.put({
+                            "type": "INTERVENTION", 
+                            "task": self.user_task,
+                            "reason": reasoning,
+                            "observed_activity": observed_activity,
+                        })
+                        if self.session_logger:
+                            self.session_logger.log_intervention(
+                                observed_activity=observed_activity,
+                                reasoning=reasoning,
+                                counter=self.unaligned_counter,
+                            )
+                    else:
+                        self._emit_log(
+                            f"Intervention suppressed by settings at {self.unaligned_counter}. Observed: {observed_activity} | Reason: {reasoning}",
+                            source="MONITOR",
                         )
                 else:
                     self.event_queue.put({"type": "STATE", "value": f"IDLE ({self.device})"})
