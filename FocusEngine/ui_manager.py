@@ -195,7 +195,7 @@ class UIManager:
         self.output_text: ScrolledText = None  # type: ignore
         
         self.root = tk.Tk()
-        self.root.title("Focus Engine (High Performance)")
+        self.root.title("Focus Engine v1.1 (Universal)")
         self.root.geometry("450x350")
         self.root.resizable(False, False)
         
@@ -218,6 +218,12 @@ class UIManager:
         self.total_counter_label: tk.Label = None  # type: ignore
         self.timer_label: tk.Label = None  # type: ignore
         self.stop_button: tk.Button = None  # type: ignore
+        
+        # Settings variables (initialized to satisfy lint/prevent errors)
+        self.one_min_var: tk.BooleanVar = None  # type: ignore
+        self.intervention_enabled_var: tk.BooleanVar = None  # type: ignore
+        self.flash_attn_var: tk.BooleanVar = None  # type: ignore
+        self.device_var: tk.StringVar = None  # type: ignore
         
         self._build_setup_view()
         
@@ -337,8 +343,25 @@ class UIManager:
             font=("Helvetica", 10, "bold")
         ).pack(anchor="w", pady=(5, 0))
 
-        self.device_var = tk.StringVar(value="Automatic (Recommended)" if config_manager.get_device() == "AUTO" else "CPU Only")
+        # Detect vendor to show better options
+        import focus_engine
+        vendor = focus_engine.detect_gpu_vendor()
+        vendor_name = "NVIDIA GPU" if vendor == "nvidia" else "AMD GPU" if vendor == "amd" else "GPU"
+        
+        current_device = config_manager.get_device()
+        if current_device == "AUTO":
+            default_val = f"Automatic ({vendor_name} Detected)" if vendor else "Automatic (Recommended)"
+        elif current_device == "CPU":
+            default_val = "CPU Only"
+        else:
+            default_val = f"Forced {current_device}"
+
+        self.device_var = tk.StringVar(value=default_val)
         device_options = ["Automatic (Recommended)", "CPU Only"]
+        if vendor == "nvidia":
+            device_options.append("Forced NVIDIA (CUDA)")
+        elif vendor == "amd":
+            device_options.append("Forced AMD (Vulkan)")
         
         # Style the OptionMenu to match Solarized theme
         self.device_menu = tk.OptionMenu(self.frame, self.device_var, *device_options)
@@ -355,7 +378,7 @@ class UIManager:
         btn_frame.pack(fill="x", side="bottom")
 
         tk.Button(
-            btn_frame, text="Cancel", bg="#93a1a1", fg="white",
+            btn_frame, text="← Back", bg="#93a1a1", fg="white",
             font=("Helvetica", 10, "bold"), command=self._build_setup_view,
             padx=10
         ).pack(side="left")
@@ -446,8 +469,15 @@ class UIManager:
         # Save device selection
         if hasattr(self, 'device_var'):
             old_device = config_manager.get_device()
-            ui_selection = self.device_var.get()
-            new_device = "AUTO" if "Automatic" in ui_selection else "CPU"
+            ui_selection = self.device_var.get().upper()
+            if "AUTOMATIC" in ui_selection:
+                new_device = "AUTO"
+            elif "NVIDIA" in ui_selection:
+                new_device = "CUDA"
+            elif "AMD" in ui_selection:
+                new_device = "VULKAN"
+            else:
+                new_device = "CPU"
             
             if old_device != new_device:
                 config_manager.set_device(new_device)

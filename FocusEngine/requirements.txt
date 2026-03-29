@@ -3,6 +3,7 @@ pyautogui>=0.9.54       # Screen capture
 pillow>=11.0.0          # Image resizing and processing
 psutil>=5.9.8           # CPU monitoring and process priority
 pystray>=0.19.5         # System tray icon
+pyinstaller>=6.4.0        # Application packaging
 # llama-cpp-python is installed via runtime profile:
 #   python install_runtime.py --profile cpu|nvidia|amd
 huggingface_hub         # For model downloading
