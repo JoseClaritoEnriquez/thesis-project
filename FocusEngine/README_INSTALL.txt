@@ -20,13 +20,11 @@ Python packages (from requirements.txt):
 - python-dotenv
 
 llama-cpp-python install profile:
+- jamepeng-cu126 (Recommended prebuilt wheel for CUDA 12.6, v0.3.33)
+- cpu (prebuilt wheel fallback for non-GPU or maximum compatibility)
 - jamepeng / jamepeng-cpu (source install from JamePeng fork)
-- nvidia (CUDA build)
-- amd (Vulkan build)
-- jamepeng-nvidia (fork + CUDA CMake args)
-- jamepeng-amd (fork + Vulkan CMake args)
-- jamepeng-cu126 (optional prebuilt wheel for CUDA 12.6, v0.3.33)
-- cpu (prebuilt wheel fallback)
+- nvidia (legacy CUDA source build)
+- amd (legacy Vulkan source build)
 
 Compatibility note:
 - Focus Engine uses whichever compatible Qwen VL chat handler is available
@@ -52,13 +50,13 @@ Run from source:
    .\.venv311\Scripts\Activate.ps1
 3. Install dependencies for your profile:
    python install_runtime.py
-   Default profile is now `cpu` for maximum compatibility on fresh Windows installs.
-   (Use --profile nvidia or --profile amd for legacy placeholders.)
-   To use the JamePeng fork:
-   python install_runtime.py --profile jamepeng
-   For fork GPU variants:
-   python install_runtime.py --profile jamepeng-nvidia
-   python install_runtime.py --profile jamepeng-amd
+    Default profile is now `jamepeng-cu126` for NVIDIA or `cpu` for compatibility.
+    (Use --profile jamepeng-cu126 to ensure the prebuilt wheel is used.)
+    To use the JamePeng fork (source build):
+    python install_runtime.py --profile jamepeng
+    For legacy source variants:
+    python install_runtime.py --profile nvidia
+    python install_runtime.py --profile amd
    If you previously installed a different `llama-cpp-python` version, rerun the command with your chosen profile.
 4. Start the app:
    python main.py

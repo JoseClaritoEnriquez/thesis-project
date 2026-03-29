@@ -76,11 +76,11 @@ def install_dependencies():
         font=("Helvetica", 10), bg="#fdf6e3", fg="#657b83"
     ).pack(pady=(0, 25))
 
-    selected_profile = tk.StringVar(value="jamepeng-cpu")
+    selected_profile = tk.StringVar(value="jamepeng-cu126")
 
     options = [
         ("CPU (Slow but highly compatible)", "jamepeng-cpu"),
-        ("NVIDIA GPU (CUDA - Fast)", "jamepeng-nvidia"),
+        ("NVIDIA GPU (CUDA - Fast)", "jamepeng-cu126"),
         ("AMD GPU (Vulkan - Fast)", "jamepeng-amd")
     ]
 
@@ -108,7 +108,7 @@ def install_dependencies():
     try:
         subprocess.check_call([sys.executable, installer, "--profile", profile])
         # Force the configuration to match the installed profile
-        if "nvidia" in profile:
+        if "nvidia" in profile or "cu126" in profile:
             config_manager.set_device("CUDA")
         elif "amd" in profile:
             config_manager.set_device("VULKAN")
@@ -204,12 +204,20 @@ def _build_log_sink(target_queue):
 
     return _sink
 
-if sys.stdout is None or sys.stderr is None:
-    logger = AutoFlushLogger(log_file)
-    if sys.stdout is None:
-        sys.stdout = logger
-    if sys.stderr is None:
-        sys.stderr = logger
+# Ensure logs are teed to the log file in the frozen version, regardless of stdout/stderr presence.
+_is_frozen = getattr(sys, 'frozen', False)
+if _is_frozen or sys.stdout is None or sys.stderr is None:
+    _logger = AutoFlushLogger(log_file)
+    # Wrap existing streams to tee to the file logger
+    if sys.stdout is not None:
+        sys.stdout = StreamTee(sys.stdout, sink=_logger.write, stream_name="STDOUT")
+    else:
+        sys.stdout = _logger
+        
+    if sys.stderr is not None:
+        sys.stderr = StreamTee(sys.stderr, sink=_logger.write, stream_name="STDERR")
+    else:
+        sys.stderr = _logger
         
 # Load environment variables as early as possible
 env_path = os.path.join(bundle_dir, '.env')

@@ -8,11 +8,13 @@ import json
 import threading
 from datetime import datetime
 
+from config_manager import get_app_data_dir
+
 
 class SessionLogger:
     """Writes inference results to a per-session JSON log file."""
 
-    LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "session_logs")
+    LOG_DIR = os.path.join(get_app_data_dir(), "session_logs")
 
     def __init__(self, intended_task: str):
         self.intended_task = intended_task

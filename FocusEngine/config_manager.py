@@ -27,8 +27,8 @@ def load_config():
     
     # Default config
     return {
-        "device": "AUTO",
-        "runtime": "auto",
+        "device": "CUDA",
+        "runtime": "cuda",
         "model_path": None,
         "backend": "llama-cpp",
     }
@@ -106,6 +106,9 @@ def set_intervention_enabled(enabled):
     config = load_config()
     config["intervention_enabled"] = bool(enabled)
     save_config(config)
+
+def get_intervention_enabled():
+    return load_config().get("intervention_enabled", True)
 
 def get_flash_attn():
     return load_config().get("flash_attn", False)

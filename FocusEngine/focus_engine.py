@@ -2,6 +2,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 import inspect
 import importlib
 import ctypes
@@ -60,8 +61,10 @@ import config_manager
 # Qwen-VL allocates a large image token block (often >=1024 tokens).
 # Increasing n_ctx reduces the chance of "exceeding capacity" during VL tokenization,
 # at the cost of significantly more RAM on CPU.
-LLAMA_VL_N_CTX = 4096
+LLAMA_VL_N_CTX = 3072
 LLAMA_VL_N_CTX_FALLBACK = 2048
+LLAMA_VL_N_BATCH_GPU = 512
+LLAMA_VL_N_BATCH_CPU = 256
 MODEL_SPEC = {
     "display_name": "Qwen2.5-VL-3B",
     "repo_id": "unsloth/Qwen2.5-VL-3B-Instruct-GGUF",
@@ -449,6 +452,7 @@ class LlamaCppBackend(FocusEngineBackend):
         self._chat_handler_name = handler_name
         self._active_n_gpu_layers = n_gpu_layers
         self._active_n_ctx = LLAMA_VL_N_CTX
+        self._active_n_batch = None
         self._n_threads = psutil.cpu_count(logical=False) or 4
         self._llama_cpp_version = getattr(importlib.import_module("llama_cpp"), "__version__", "unknown")
         self._kv_clear_warning_emitted = False
@@ -502,6 +506,13 @@ class LlamaCppBackend(FocusEngineBackend):
         from llama_cpp import Llama
 
         self._active_n_gpu_layers = n_gpu_layers
+        runtime_for_batch = getattr(self, "effective_runtime", self.runtime)
+        batch_cap = (
+            LLAMA_VL_N_BATCH_GPU
+            if runtime_for_batch in ("cuda", "vulkan")
+            else LLAMA_VL_N_BATCH_CPU
+        )
+        self._active_n_batch = min(int(n_ctx), int(batch_cap))
         flash_attn = config_manager.get_flash_attn()
         # Temporarily disabled for debugging
         # with _suppress_llama_native_io():
@@ -510,12 +521,29 @@ class LlamaCppBackend(FocusEngineBackend):
             chat_handler=self._chat_handler,
             n_gpu_layers=n_gpu_layers,
             n_ctx=n_ctx,
-            n_batch=n_ctx,
+            n_batch=self._active_n_batch,
             flash_attn=flash_attn,
             n_threads=getattr(self, "_n_threads", None),
             n_threads_batch=getattr(self, "_n_threads", None),
             verbose=False,
         )
+
+    def _run_with_heartbeat(self, label, fn):
+        """Emit periodic logs while waiting in blocking llama-cpp calls."""
+        stop_event = threading.Event()
+        started_at = time.time()
+
+        def _heartbeat():
+            while not stop_event.wait(20):
+                elapsed = int(time.time() - started_at)
+                self.report(f"{label} still running... ({elapsed}s elapsed)")
+
+        thread = threading.Thread(target=_heartbeat, daemon=True)
+        thread.start()
+        try:
+            return fn()
+        finally:
+            stop_event.set()
 
     def _clear_kv_cache(self):
         """Aggressively clear KV cache to prevent cross-call state contamination
@@ -664,9 +692,12 @@ class LlamaCppBackend(FocusEngineBackend):
         completion_options = dict(gen_options)
         completion_options.setdefault("stop", ["<|im_end|>", "<|im_start|>"])
         with _suppress_llama_native_io():
-            completion = self.llm.create_completion(
-                prompt=self._qwen_completion_prompt(prompt),
-                **completion_options,
+            completion = self._run_with_heartbeat(
+                "Text inference",
+                lambda: self.llm.create_completion(
+                    prompt=self._qwen_completion_prompt(prompt),
+                    **completion_options,
+                ),
             )
         result = _sanitize_model_text(completion["choices"][0]["text"])
         # Clear cache after text-only completion so the next VL chat call
@@ -680,7 +711,7 @@ class LlamaCppBackend(FocusEngineBackend):
             "llama_cpp_version": self._llama_cpp_version,
             "chat_handler": self._chat_handler_name,
             "n_ctx": self._active_n_ctx,
-            "n_batch": self._active_n_ctx,
+            "n_batch": self._active_n_batch,
             "model_file": os.path.basename(self._llm_path),
             "mmproj_file": os.path.basename(self._mmproj_path),
         }
@@ -733,9 +764,12 @@ class LlamaCppBackend(FocusEngineBackend):
         for attempt in range(2):
             try:
                 with _suppress_llama_native_io():
-                    response = self.llm.create_chat_completion(
-                        messages=messages,
-                        **gen_options,
+                    response = self._run_with_heartbeat(
+                        "Vision inference (Pass 1)",
+                        lambda: self.llm.create_chat_completion(
+                            messages=messages,
+                            **gen_options,
+                        ),
                     )
                 raw_content = response["choices"][0]["message"]["content"]
                 result = _sanitize_model_text(raw_content)
@@ -923,9 +957,9 @@ class FocusEngine:
             _hide_app_windows()
             screenshot = pyautogui.screenshot()
 
-            # Use a downscale for 1080p (longest side 960) to retain
-            # more detail, relying on the higher n_ctx and retry safeguards.
-            max_side = 960
+            # On GPU runtimes, a smaller frame reduces VL prefill latency and
+            # avoids apparent "stuck" passes on first decode.
+            max_side = 768 if self.backend.effective_runtime in ("cuda", "vulkan") else 960
             w, h = screenshot.size
             scale = min(max_side / w, max_side / h, 1.0)
             new_size = (int(w * scale), int(h * scale))

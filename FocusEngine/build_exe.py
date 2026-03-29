@@ -24,7 +24,7 @@ def build():
     build_dir = os.path.join(script_dir, "build")
 
     print("--- Focus Engine: Automated Build Pipeline ---")
-    if sys.version_info[:2] != (3, 11):
+    if (sys.version_info.major, sys.version_info.minor) != (3, 11):
         print("Warning: This project is tested with Python 3.11.")
         print(f"Current interpreter: {sys.executable}")
         print("Recommended: .\\.venv311\\Scripts\\python.exe build_exe.py")

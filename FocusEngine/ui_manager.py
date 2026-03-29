@@ -337,8 +337,15 @@ class UIManager:
             font=("Helvetica", 10, "bold")
         ).pack(anchor="w", pady=(5, 0))
 
-        self.device_var = tk.StringVar(value="Automatic (Recommended)" if config_manager.get_device() == "AUTO" else "CPU Only")
-        device_options = ["Automatic (Recommended)", "CPU Only"]
+        current_device = config_manager.get_device()
+        initial_value = "NVIDIA GPU (CUDA)"
+        if current_device == "VULKAN":
+            initial_value = "AMD GPU (Vulkan)"
+        elif current_device == "CPU":
+            initial_value = "CPU Only"
+            
+        self.device_var = tk.StringVar(value=initial_value)
+        device_options = ["NVIDIA GPU (CUDA)", "AMD GPU (Vulkan)", "CPU Only"]
         
         # Style the OptionMenu to match Solarized theme
         self.device_menu = tk.OptionMenu(self.frame, self.device_var, *device_options)
@@ -447,7 +454,12 @@ class UIManager:
         if hasattr(self, 'device_var'):
             old_device = config_manager.get_device()
             ui_selection = self.device_var.get()
-            new_device = "AUTO" if "Automatic" in ui_selection else "CPU"
+            if "NVIDIA" in ui_selection:
+                new_device = "CUDA"
+            elif "AMD" in ui_selection:
+                new_device = "VULKAN"
+            else:
+                new_device = "CPU"
             
             if old_device != new_device:
                 config_manager.set_device(new_device)

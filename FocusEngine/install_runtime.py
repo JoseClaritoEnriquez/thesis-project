@@ -6,8 +6,11 @@ import sys
 
 
 CPU_WHEEL_INDEX = "https://abetlen.github.io/llama-cpp-python/whl/cpu"
-LLAMA_CPP_VERSION = "0.3.2"
+LLAMA_CPP_VERSION = "0.3.33"
 LLAMA_CPP_FORK_SPEC = "llama-cpp-python @ git+https://github.com/JamePeng/llama-cpp-python.git"
+# Prebuilt CUDA wheel (JamePeng release). Constraints MUST match the filename:
+#   Python 3.11 only (cp311), Windows 64-bit (win_amd64), CUDA 12.6-linked build.
+# If pip reports "no matching distribution", your interpreter or OS does not match.
 JAMEPENG_CU126_WHEEL = "https://github.com/JamePeng/llama-cpp-python/releases/download/v0.3.33-cu126-Basic-win-20260315/llama_cpp_python-0.3.33+cu126.basic-cp311-cp311-win_amd64.whl"
 
 # MinGW w64devkit: set W64DEVKIT to the kit root (folder that contains `bin/gcc.exe`).
@@ -28,7 +31,7 @@ def _win32_openmp_link_cmake_args():
 
 
 def _cmake_env(*flag_groups):
-    parts = [p.strip() for p in flag_groups if p and str(p).strip()]
+    parts = [str(p).strip() for p in flag_groups if p and str(p).strip()]
     if not parts:
         return None
     return {"CMAKE_ARGS": " ".join(parts)}
@@ -36,7 +39,7 @@ def _cmake_env(*flag_groups):
 
 def _require_supported_python_for_source_llama():
     """llama-cpp-python source wheels are validated on Python 3.11 for this project."""
-    major, minor = sys.version_info[:2]
+    major, minor = sys.version_info.major, sys.version_info.minor
     if (major, minor) >= (3, 13):
         raise RuntimeError(
             f"Source install of llama-cpp-python is not supported on Python {major}.{minor} here. "
@@ -134,16 +137,56 @@ def install_base():
     _run([sys.executable, "-m", "pip", "install", "-r", req_file])
 
 
-def install_llama(profile):
+def _require_prebuilt_cu126_wheel_compatible():
+    """
+    jamepeng-cu126 installs a single fixed wheel (cp311, win_amd64).
+    Fail fast with actionable errors instead of a cryptic pip resolution message.
+    """
+    if sys.platform != "win32":
+        raise RuntimeError(
+            "Profile 'jamepeng-cu126' only provides a prebuilt Windows wheel. "
+            "On Linux/macOS use: --profile jamepeng-nvidia (CUDA, source build) or --profile cpu."
+        )
+    if sys.maxsize <= 2**32:
+        raise RuntimeError(
+            "Profile 'jamepeng-cu126' requires 64-bit Python (win_amd64). "
+            "This interpreter appears to be 32-bit."
+        )
+    if (sys.version_info.major, sys.version_info.minor) != (3, 11):
+        raise RuntimeError(
+            "The bundled CUDA 12.6 wheel is built for Python 3.11 only (cp311-cp311). "
+            f"You are on Python {sys.version_info.major}.{sys.version_info.minor}. "
+            "Fix: recreate the venv with 3.11 (e.g. py -3.11 -m venv .venv311), then rerun. "
+            "Alternative: python install_runtime.py --profile jamepeng-nvidia "
+            "(source build with CUDA; requires MSVC/CMake/CUDA per project docs)."
+        )
+
+
+def install_llama(profile, force=False):
     profile = str(profile).strip().lower()
-    if profile in {"jamespeng", "jamespeng-cpu"}:
-        profile = "jamepeng"
-    if profile in {"jamespeng-nvidia", "jamepeng-nvidia"}:
-        profile = "jamepeng-nvidia"
     if profile in {"jamespeng-amd", "jamepeng-amd"}:
         profile = "jamepeng-amd"
+    if profile == "cu126":
+        profile = "jamepeng-cu126"
+
+    # Smart check: skip if correct version is already installed
+    if not force:
+        try:
+            from importlib import metadata
+            v = metadata.version("llama-cpp-python")
+            if profile == "jamepeng-cu126" and v == "0.3.33+cu126.basic":
+                print(f"Profile '{profile}' matches installed version {v}. Skipping.")
+                return
+            if profile == "cpu" and v == "0.3.33" and "+" not in v:
+                print(f"Profile '{profile}' matches installed version {v}. Skipping.")
+                return
+        except:
+            pass
+    if profile == "cu126":
+        profile = "jamepeng-cu126"
 
     if profile == "jamepeng-cu126":
+        _require_prebuilt_cu126_wheel_compatible()
         _run(
             [
                 sys.executable,
@@ -151,8 +194,6 @@ def install_llama(profile):
                 "pip",
                 "install",
                 "--upgrade",
-                "--force-reinstall",
-                "--no-cache-dir",
                 JAMEPENG_CU126_WHEEL,
             ]
         )
@@ -227,14 +268,14 @@ def install_llama(profile):
 
     if profile == "nvidia":
         raise RuntimeError(
-            "NVIDIA profile currently requires source builds in this script. "
-            "To guarantee a prebuilt wheel, use --profile cpu."
+            "The 'nvidia' profile requires a local C++ compiler for a source build. "
+            "To use a prebuilt CUDA wheel instead, use --profile jamepeng-cu126."
         )
 
     if profile == "amd":
         raise RuntimeError(
-            "AMD profile currently requires source builds in this script. "
-            "To guarantee a prebuilt wheel, use --profile cpu."
+            "The 'amd' profile requires a local C++ compiler for a source build. "
+            "For maximum compatibility with prebuilt wheels, use --profile cpu."
         )
 
     raise ValueError(f"Unsupported profile: {profile}")
@@ -255,19 +296,24 @@ def main():
             "jamepeng-nvidia",
             "jamepeng-amd",
             "jamepeng-cu126",
+            "cu126",
             "jamespeng",
             "jamespeng-cpu",
             "jamespeng-nvidia",
             "jamespeng-amd",
         ],
-        default="cpu",
-        help="Runtime backend profile for llama-cpp-python.",
+        default="jamepeng-cu126",
+        help=(
+            "llama-cpp-python profile. "
+            "jamepeng-cu126 = prebuilt CUDA 12.6 wheel (Windows x64 + Python 3.11 only)."
+        ),
     )
+    parser.add_argument("--force", action="store_true", help="Force reinstall of llama-cpp-python.")
     args = parser.parse_args()
 
     print(f"Installing FocusEngine dependencies (profile={args.profile})")
     install_base()
-    install_llama(args.profile)
+    install_llama(args.profile, force=args.force)
     print("Dependency install complete.")
 
 

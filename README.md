@@ -42,9 +42,9 @@ Using the fork profiles enables newer upstream features (including newer chat ha
    ```powershell
    python install_runtime.py
    ```
-   For NVIDIA GPUs:
+   For NVIDIA GPUs (Recommended):
    ```powershell
-   python install_runtime.py --profile nvidia
+   python install_runtime.py --profile jamepeng-cu126
    ```
    For AMD GPUs:
    ```powershell

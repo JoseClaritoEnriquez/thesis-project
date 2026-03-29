@@ -3,8 +3,12 @@ pyautogui>=0.9.54       # Screen capture
 pillow>=11.0.0          # Image resizing and processing
 psutil>=5.9.8           # CPU monitoring and process priority
 pystray>=0.19.5         # System tray icon
-# llama-cpp-python is installed via runtime profile:
-#   python install_runtime.py --profile cpu|nvidia|amd
+# llama-cpp-python is installed via install_runtime.py (NOT plain pip).
+# Common profiles:
+#   python install_runtime.py --profile jamepeng-cu126   # NVIDIA: prebuilt CUDA 12.6 wheel (Python 3.11 + Windows x64 only)
+#   python install_runtime.py --profile cpu              # CPU wheel from abetlen index
+#   python install_runtime.py --profile jamepeng-nvidia  # CUDA: source build (any supported Py; needs toolchain)
+# Profiles "nvidia" and "amd" are removed; use jamepeng-cu126 or jamepeng-nvidia / jamepeng-amd instead.
 huggingface_hub         # For model downloading
 
 
@@ -12,3 +16,6 @@ huggingface_hub         # For model downloading
 numpy                   # Required for tensor manipulation
 python-dotenv>=1.0.1    # For local environment privacy flags
 huggingface_hub         # For model downloading
+
+# --- Build Tools ---
+PyInstaller             # For EXE compilation
