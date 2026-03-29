@@ -102,12 +102,17 @@ def set_one_minute_mode(enabled):
     config["one_minute_mode"] = bool(enabled)
     save_config(config)
 
-def get_intervention_enabled():
-    return load_config().get("intervention_enabled", True)
-
 def set_intervention_enabled(enabled):
     config = load_config()
     config["intervention_enabled"] = bool(enabled)
+    save_config(config)
+
+def get_flash_attn():
+    return load_config().get("flash_attn", False)
+
+def set_flash_attn(enabled):
+    config = load_config()
+    config["flash_attn"] = bool(enabled)
     save_config(config)
 
 def get_backend():

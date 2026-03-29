@@ -107,6 +107,14 @@ def install_dependencies():
     print(f"Checking/Installing dependencies (profile={profile})...")
     try:
         subprocess.check_call([sys.executable, installer, "--profile", profile])
+        # Force the configuration to match the installed profile
+        if "nvidia" in profile:
+            config_manager.set_device("CUDA")
+        elif "amd" in profile:
+            config_manager.set_device("VULKAN")
+        else:
+            config_manager.set_device("CPU")
+        print(f"Device configuration updated to match profile: {profile}")
     except Exception as e:
         print(f"Auto-install failed: {e}")
 
@@ -119,6 +127,13 @@ if not getattr(sys, 'frozen', False):
         import huggingface_hub
         import PIL
         import numpy
+        
+        # Verify llama_cpp has Qwen VL support from the required fork
+        import importlib
+        chat_module = importlib.import_module("llama_cpp.llama_chat_format")
+        if not any(hasattr(chat_module, name) for name in ("Qwen25VLChatHandler", "Qwen2VLChatHandler", "Qwen3VLChatHandler")):
+            raise RuntimeError("Installed llama-cpp-python lacks Qwen VL support. Reinstall required.")
+            
     except (ImportError, RuntimeError):
         install_dependencies()
 

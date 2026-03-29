@@ -323,6 +323,33 @@ class UIManager:
             activebackground=self.bg_color,
         ).pack(anchor="w", pady=(0, 15))
 
+        self.flash_attn_var = tk.BooleanVar(value=config_manager.get_flash_attn())
+        tk.Checkbutton(
+            self.frame, text="Flash Attention (⚡ Fast - Modern GPUs only)", 
+            variable=self.flash_attn_var,
+            bg=self.bg_color, fg="#268bd2", font=("Helvetica", 10, "italic"),
+            selectcolor=self.bg_color, activebackground=self.bg_color
+        ).pack(anchor="w", pady=(0, 15))
+
+        # Device Selection
+        tk.Label(
+            self.frame, text="AI Inference Device:", bg=self.bg_color, fg=self.fg_color,
+            font=("Helvetica", 10, "bold")
+        ).pack(anchor="w", pady=(5, 0))
+
+        self.device_var = tk.StringVar(value="Automatic (Recommended)" if config_manager.get_device() == "AUTO" else "CPU Only")
+        device_options = ["Automatic (Recommended)", "CPU Only"]
+        
+        # Style the OptionMenu to match Solarized theme
+        self.device_menu = tk.OptionMenu(self.frame, self.device_var, *device_options)
+        self.device_menu.config(
+            bg="#eee8d5", fg="#657b83", font=("Helvetica", 10),
+            activebackground="#93a1a1", activeforeground="#fdf6e3",
+            highlightthickness=0, relief="flat"
+        )
+        self.device_menu["menu"].config(bg="#eee8d5", fg="#657b83", font=("Helvetica", 10))
+        self.device_menu.pack(anchor="w", pady=(5, 15), fill="x")
+
         # Button row
         btn_frame = tk.Frame(self.frame, bg=self.bg_color)
         btn_frame.pack(fill="x", side="bottom")
@@ -413,6 +440,23 @@ class UIManager:
             config_manager.set_one_minute_mode(self.one_min_var.get())
         if hasattr(self, 'intervention_enabled_var'):
             config_manager.set_intervention_enabled(self.intervention_enabled_var.get())
+        if hasattr(self, 'flash_attn_var'):
+            config_manager.set_flash_attn(self.flash_attn_var.get())
+        
+        # Save device selection
+        if hasattr(self, 'device_var'):
+            old_device = config_manager.get_device()
+            ui_selection = self.device_var.get()
+            new_device = "AUTO" if "Automatic" in ui_selection else "CPU"
+            
+            if old_device != new_device:
+                config_manager.set_device(new_device)
+                if self.settings_changed_callback:
+                    self.settings_changed_callback()
+                    # settings_changed_callback usually reloads the engine, 
+                    # which might close the settings view via its own splash flow.
+                    return 
+
         self._build_setup_view()
 
     def _on_start(self):

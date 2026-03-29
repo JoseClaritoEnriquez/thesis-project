@@ -120,6 +120,11 @@ def _run(cmd, extra_env=None):
     env = os.environ.copy()
     if extra_env:
         env.update(extra_env)
+    if sys.platform == "win32":
+        cflags = env.get("CFLAGS", "")
+        env["CFLAGS"] = f"{cflags} -D_WIN32_WINNT=0x0A00".strip()
+        cxxflags = env.get("CXXFLAGS", "")
+        env["CXXFLAGS"] = f"{cxxflags} -D_WIN32_WINNT=0x0A00".strip()
     print("Running:", " ".join(cmd))
     subprocess.check_call(cmd, env=env)
 

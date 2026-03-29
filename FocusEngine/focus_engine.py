@@ -502,6 +502,7 @@ class LlamaCppBackend(FocusEngineBackend):
         from llama_cpp import Llama
 
         self._active_n_gpu_layers = n_gpu_layers
+        flash_attn = config_manager.get_flash_attn()
         # Temporarily disabled for debugging
         # with _suppress_llama_native_io():
         return Llama(
@@ -510,6 +511,7 @@ class LlamaCppBackend(FocusEngineBackend):
             n_gpu_layers=n_gpu_layers,
             n_ctx=n_ctx,
             n_batch=n_ctx,
+            flash_attn=flash_attn,
             n_threads=getattr(self, "_n_threads", None),
             n_threads_batch=getattr(self, "_n_threads", None),
             verbose=False,

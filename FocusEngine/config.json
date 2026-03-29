@@ -1,7 +1,7 @@
 {
-    "device": "CPU",
-    "runtime": "cpu",
-    "model_path": "C:/Users/Core i5/Documents/documents",
+    "device": "CUDA",
+    "runtime": "cuda",
+    "model_path": "E:/JaceThesisProject",
     "backend": "llama-cpp",
     "one_minute_mode": false,
     "intervention_enabled": false
